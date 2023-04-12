@@ -117,9 +117,11 @@ struct Format {
 		ctx.alloc ();
 		} catch (a_ins_mem& exp)
 		{
-			using std::cerr, std::endl;
+			using std::cerr;
+			using std::endl;
 
 			cerr<<exp.what()<<endl;
+			throw;
 		}
 	}
 
@@ -133,26 +135,25 @@ struct Format {
 
 	~Format ()
 	{
+		using namespace std;
+		cerr<<"Format:: closed."<<endl;
 		avformat_free_context(fmtctx);
 	}
 
 };
 
-Format transcode_ (char *str)
-{
-	Format f(str);
-	printf("%p:%p\n", f.fmtctx, f.ctx.dec_ctx);
-	return f;
-}
 
 auto main(int argsc, char **args) -> int
 {
 	if (argsc<2) abort();
-	vector<Format> f;
-	while (1)
+	vector<Format*> f;
+	for (char **p=&args[1]; p && *p; p++)
 	{
-		b_string s(args[1]);
-		transcode_ (s);
+		f.push_back (new Format(*p));
+	}
+	for(Format*& t: f)
+	{
+		delete t;
 	}
 	return int(0);
 }
