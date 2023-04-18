@@ -6,16 +6,25 @@ class Format(fobject.Format):
         (fobject.Format).__init__(s, *a, *kw)
         pass
     def __repr__(s):
-        return "AVFormat({0!r})".format(s.args)
+        return "AVFormat({0!r})".format(s.args[0])
     pass
 def args():
     import sys
-    yield from iter(sys.argv[1:])
+    while True:
+        yield from iter(sys.argv[1:])
     pass
-x=[]
-for i in args():
-    j=Format(i)
-    x.append(j)
-    print(j)
+import asyncio
+async def ugh():
+    try:
+        for i in args():
+            j=Format(i)
+            await asyncio.sleep(0.1)
+            print(j)
+            pass
+    except Exception:
+        print(len(x));
+        pass
     pass
-print(x);
+
+#asyncio.run(ugh())
+print(dir(fobject))

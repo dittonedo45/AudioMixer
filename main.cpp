@@ -8,9 +8,7 @@ extern "C" {
 #include <libavfilter/avfilter.h>
 };
 
-using std::string;
-using std::exception;
-using std::vector;
+using namespace std;
 
 struct b_string : public string 
 {
@@ -88,6 +86,7 @@ struct Format {
 	AVFormatContext* fmtctx{NULL};
 	int ret, stream_index;
 	Codec ctx;
+	AVPacket* pkt{av_packet_alloc()};
 
 	operator int()
 	{
@@ -114,15 +113,16 @@ struct Format {
 		if (ret<0) {
 			throw a_exception ();
 		}
-		stream_index=ret=av_find_best_stream (fmtctx, AVMEDIA_TYPE_AUDIO,
-				-1, -1, ctx, NULL);
+		stream_index=ret=av_find_best_stream (fmtctx,
+				AVMEDIA_TYPE_AUDIO,
+				-1,
+				-1,
+				ctx,
+				NULL);
 		try{
-		ctx.alloc ();
+			ctx.alloc ();
 		} catch (a_ins_mem& exp)
 		{
-			using std::cerr;
-			using std::endl;
-
 			cerr<<exp.what()<<endl;
 			throw;
 		}
@@ -135,6 +135,10 @@ struct Format {
 			throw a_find_stream_error ();
 		}
 	}
+	AVPacket*& get_packet ()
+	{
+		return pkt;
+	}
 
 	~Format ()
 	{
@@ -143,12 +147,66 @@ struct Format {
 
 };
 
-struct fobject {
-	PyObject_HEAD
-	Format* fmtctx;
-};
+#define DEFINE(packet,pkt,av_packet_alloc,av_packet_free)\
+namespace packet\
+{\
+	struct fobject {\
+		PyObject_HEAD\
+		AVPacket* pkt;\
+	};\
+	using T=PyObject*;\
+	T fobject_new (PyTypeObject* t, T a, T k)\
+	{\
+		return t->tp_alloc(t, 0);\
+	}\
+	int fobject_init (T t, T a, T k)\
+	{\
+		PyGILState_STATE state=PyGILState_Ensure ();\
+		fobject* fb=(fobject*)t;\
+		struct gil\
+		{\
+			PyGILState_STATE state;\
+			gil(){\
+				state=PyGILState_Ensure ();\
+			}\
+			~gil(){\
+				PyGILState_Release (state);\
+			}\
+		} g;\
+		fb->pkt=av_packet_alloc ();\
+		if (!fb->pkt )\
+		{\
+			PyErr_NoMemory ();\
+			return 1;\
+		}\
+		return 0;\
+	}\
+	void fobject_dealloc (T o)\
+	{\
+		fobject* f=(fobject*) o;\
+		av_packet_free (&f->pkt);\
+	}\
+	static PyTypeObject fobject_type ={\
+		PyVarObject_HEAD_INIT (NULL, 0)\
+		.tp_name="AVPacket",\
+		.tp_init=fobject_init,\
+		.tp_dealloc=fobject_dealloc,\
+		.tp_new=fobject_new,\
+		.tp_basicsize=sizeof(fobject),\
+		.tp_flags=Py_TPFLAGS_DEFAULT|Py_TPFLAGS_BASETYPE\
+	};\
+}
+
+DEFINE(AVPacket,"AVPacket", packet,pkt,av_packet_alloc,av_packet_free);
+DEFINE(AVFrame, "AVFrame", frame,pkt,av_frame_alloc,av_frame_free);
+
 namespace f
 {
+	struct fobject {
+		PyObject_HEAD
+		Format* fmtctx;
+	};
+
 	using T=PyObject*;
 	T fobject_new (PyTypeObject* t, T a, T k)
 	{
@@ -161,7 +219,18 @@ namespace f
 
 		if (!PyArg_ParseTuple (a, "s", &path))
 			return 1;
+		PyGILState_STATE state=PyGILState_Ensure ();
 		try{
+			struct gil
+			{
+				PyGILState_STATE state;
+				gil(){
+					state=PyGILState_Ensure ();
+				}
+				~gil(){
+					PyGILState_Release (state);
+				}
+			} g;
 			fb->fmtctx=new Format(path);
 		}catch(a_exception& exp)
 		{
@@ -200,10 +269,14 @@ namespace f
 		};
 
 		PyObject *ov=PyModule_Create (&avv);
+
 		PyType_Ready (&fobject_type);
+		PyType_Ready (&packet::fobject_type);
 
 		PyModule_AddObject (ov, "Format",
 				(T)&fobject_type);
+		PyModule_AddObject (ov, "Packet",
+				(T)&packet::fobject_type);
 
 		return ov;
 	}
