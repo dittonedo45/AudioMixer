@@ -1,10 +1,25 @@
 import fobject
+import sys
 
 class Format(fobject.Format):
     def __init__(s, *a, **kw):
         s.args=a
         (fobject.Format).__init__(s, *a, *kw)
         pass
+    def _get_packet(s):
+        while True:
+            try:
+                yield s.get_packet ()
+            except EOFError:
+                break
+    def __iter__(s):
+        for i in s._get_packet ():
+            yield s.send_frame(i)
+            try:
+                while True:
+                    yield s.send_frame(None)
+            except EOFError:
+                pass
     def __repr__(s):
         return "AVFormat({0!r})".format(s.args[0])
     pass
@@ -26,5 +41,5 @@ async def ugh():
         pass
     pass
 
-#asyncio.run(ugh())
-print(dir(fobject))
+for i in zip(*map (lambda x: Format(x), sys.argv[1:])):
+    print(i)
