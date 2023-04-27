@@ -9,9 +9,15 @@ extern "C" {
 #include <libavfilter/avfilter.h>
 #include <libswresample/swresample.h>
 #include <libavfilter/avfilter.h>
+#include <libavfilter/buffersink.h>
+#include <libavfilter/buffersrc.h>
+#include <libavutil/avutil.h>
+#include <libavutil/opt.h>
 };
 
 using namespace std;
+AVFilterContext *ctx1, *ctx2, *sink;
+AVCodecContext* enc;
 
 struct b_string : public string 
 {
@@ -473,17 +479,46 @@ namespace f
 	{
 		PyObject* arg;
 		int index;
+		int r;
 		if (!PyArg_ParseTuple (a, "Oi", &arg, &index))
 			return NULL;
 		AVFrame* frame=(AVFrame*)PyCapsule_GetPointer (arg,
 				"_frame");
-		printf("%d %p %d (%d)\n",
-			frame->sample_rate,
-			frame->data,
-			frame->nb_samples,
-			index
-			);
-		printf("%p\n", frame);
+		if (index==0)
+		{
+			r=av_buffersrc_add_frame (ctx1, frame);
+		}else{
+			r=av_buffersrc_add_frame (ctx2, frame);
+		}
+		if (r>=0)
+		{
+			AVFrame* frame=av_frame_alloc ();
+
+			do {
+				r = av_buffersink_get_frame_flags (sink,
+					      frame, 4);
+				if (r>=0)
+				{
+					r=avcodec_send_frame (enc, frame);
+					if (r>=0)
+					{
+						AVPacket* pkt=av_packet_alloc ();
+						do{
+							if (avcodec_receive_packet (enc,
+									pkt)) break;
+							fwrite(pkt->data,
+								pkt->size,
+								1, stdout);
+							fflush(stdout);
+						} while (1);
+						av_packet_free (&pkt);
+					}
+				}
+			}while (r>=0);
+			av_frame_free(&frame);
+			avfilter_graph_send_command (sink->graph,
+					"EOF", NULL, NULL, NULL, 0, 0);
+		}
 		Py_RETURN_NONE;
 	}
 	static PyTypeObject fobject_type ={
@@ -615,6 +650,92 @@ struct f_graph {
 auto main(int argsc, char **args) -> int
 {
 	using namespace std;
+	AVFilterGraph *fg;
+	fg = avfilter_graph_alloc ();
+	int rate=44100;
+	int r;
+
+	char buf[1054];
+	const AVFilter* f=avfilter_get_by_name ("abuffer");
+	const AVFilter* fs=avfilter_get_by_name ("abuffersink");
+	AVCodec* e=avcodec_find_encoder (
+		AV_CODEC_ID_MP3);
+	uint64_t c_l;
+
+	for (const int *p=e->supported_samplerates;
+			p && *p<=0; p++)
+	{
+		if(rate<*p)
+			rate=*p;
+	}
+	c_l=*e->channel_layouts;
+	enc=avcodec_alloc_context3 (e);
+	enc->time_base={1, rate};
+	enc->sample_fmt=*(e->sample_fmts);
+	enc->sample_rate=rate;
+	enc->channel_layout=c_l;
+
+	r=avcodec_open2(enc, e, NULL);
+	if (r<0) abort ();
+
+	snprintf (buf, 1054,
+		  "time_base=%d/%d:sample_rate=%d:sample_fmt=%s:channel_layout=0x%llx",
+		  1, rate, rate,
+		  av_get_sample_fmt_name (*(e->sample_fmts)),
+		  c_l);
+	static uint8_t sfff=*(e->sample_fmts);
+	r = avfilter_graph_create_filter (&ctx1,
+			f, "in1", buf, 0, fg);
+	if (r<0) abort ();
+	r = avfilter_graph_create_filter (&ctx2,
+			f, "in2", buf, 0, fg);
+	if (r<0) abort ();
+	r = avfilter_graph_create_filter (&sink, fs,
+					  "out", NULL, NULL, fg);
+	if (r<0) abort ();
+
+	AVFilterInOut *outs = avfilter_inout_alloc ();
+	AVFilterInOut *out = avfilter_inout_alloc ();
+	AVFilterInOut *ins = avfilter_inout_alloc ();
+
+	    av_opt_set_bin (sink, "sample_rates",
+			    (uint8_t *) & rate,
+			    sizeof (rate),
+			    AV_OPT_SEARCH_CHILDREN);
+	    av_opt_set_bin (sink, "channel_layouts",
+			    (uint8_t *) & c_l,
+			    sizeof (c_l),
+			    AV_OPT_SEARCH_CHILDREN);
+	    av_opt_set_bin (sink, "sample_fmts",
+			    (uint8_t *) &sfff,
+			    sizeof (c_l),
+			    AV_OPT_SEARCH_CHILDREN);
+
+	    outs->name = av_strdup ("in2");
+	    outs->filter_ctx = ctx1;
+	    outs->pad_idx = 0;
+	    outs->next = out;
+
+	    out->name = av_strdup ("in1");
+	    out->filter_ctx = ctx2;
+	    out->pad_idx = 0;
+	    out->next = NULL;
+
+	    ins->name = av_strdup ("out");
+	    ins->filter_ctx = sink;
+	    ins->pad_idx = 0;
+	    ins->next = 0;
+
+	    {
+	      r =
+		avfilter_graph_parse_ptr (fg, "[in1] lowpass, [in2]amerge, asetrate=44100*1.2[out]", &ins,
+					  &outs, 0);
+	      avfilter_inout_free (&ins);
+	      avfilter_inout_free (&outs);
+	    }
+	    if (r<0) abort();
+	    r = avfilter_graph_config (fg, NULL);
+	    if (r<0) abort();
 	PyImport_AppendInittab ("fobject", &f::PyInit_av);
 	Py_InitializeEx (0);
 	Py_BytesMain (argsc, args);
