@@ -1,12 +1,14 @@
 #include <iostream>
 #include <vector>
 #include <memory>
+#include <cstdio>
 extern "C" {
 #include <libavformat/avformat.h>
 #include <python3.8/Python.h>
 #include <libavcodec/avcodec.h>
 #include <libavfilter/avfilter.h>
 #include <libswresample/swresample.h>
+#include <libavfilter/avfilter.h>
 };
 
 using namespace std;
@@ -85,7 +87,8 @@ struct Codec {
 
 struct OSPacket : public exception {};
 
-struct Format {
+class  Format {
+	public:
 	AVFormatContext* fmtctx{NULL};
 	int ret, stream_index, rchd_end{0};
 	int rate{44100};
@@ -170,11 +173,9 @@ struct Format {
 				 0,
 				 NULL
 				 );
-			/*
 			int ret=swr_init(swr);
 			if (ret<0)
 				abort ();
-				*/
 		} catch (a_ins_mem& exp)
 		{
 			cerr<<exp.what()<<endl;
@@ -189,6 +190,7 @@ struct Format {
 			throw a_find_stream_error ();
 		}
 	}
+	private:
 	void _get_packet ()
 	{
 		int ret(av_read_frame (fmtctx, pkt));
@@ -197,6 +199,7 @@ struct Format {
 		if (ret<0)
 			throw OSPacket();
 	}
+	public:
 	AVPacket*& get_packet ()
 	{
 		while (1)
@@ -220,6 +223,20 @@ struct Format {
 			throw 1;
 		rchd_end=0;
 		return 2;
+	}
+
+	void seek(int s)
+	{
+		int64_t seek_target=s*AV_TIME_BASE/1000000;
+		int ret=avformat_seek_file (fmtctx, stream_index, INT64_MIN, seek_target, INT64_MAX, AVSEEK_FLAG_FRAME
+				);
+		if (ret<0)
+			throw ret;
+	}
+
+	long duration()
+	{
+		return fmtctx->streams[stream_index]->duration;
 	}
 
 	AVFrame* get_frames()
@@ -250,6 +267,7 @@ struct Format {
 	~Format ()
 	{
 		avcodec_free_context (&enc);
+		avformat_close_input (&fmtctx);
 		avformat_free_context(fmtctx);
 	}
 
@@ -353,7 +371,7 @@ namespace f
 		fobject* f=(fobject*) o;
 		delete f->fmtctx;
 	}
-	PyObject* get_packet (PyObject* s, PyObject* a)
+	T get_packet (T s, T a)
 	{
 		AVPacket *pkt(av_packet_alloc ());
 		try {
@@ -361,7 +379,7 @@ namespace f
 			AVPacket*& pkt=f->fmtctx->get_packet ();
 			AVPacket* res=av_packet_clone(pkt);
 			return PyCapsule_New(res, "_packet",
-					+[](PyObject* obj)
+					+[](T obj)
 					{
 					AVPacket* p=
 					(AVPacket*)
@@ -375,10 +393,10 @@ namespace f
 			return NULL;
 		}
 	}
-	PyObject* get_frames (PyObject* s, PyObject* a)
+	T get_frames (T s, T a)
 	{
 		AVPacket *pkt(av_packet_alloc ());
-		PyObject* arg;
+		T arg;
 		if (!PyArg_ParseTuple (a, "O", &arg))
 			return NULL;
 		try {
@@ -395,7 +413,7 @@ namespace f
 			if (!frame)
 				throw 0x0;
 			return PyCapsule_New(frame, "_frame",
-					+[](PyObject* obj)
+					+[](T obj)
 				{
 					AVFrame* p=
 					(AVFrame*)
@@ -409,13 +427,65 @@ namespace f
 			return NULL;
 		}
 	}
+	T seek_duration (T s, T a)
+	{
+		int arg{0};
+		if (!PyArg_ParseTuple (a, "|d", &arg))
+			return NULL;
+		try {
+			fobject* f=(fobject*) s;
+			f->fmtctx->seek (arg);
+		}catch(...)
+		{
+			PyErr_Format (PyExc_Exception,
+					"Can not seek any file so easily.");
+			return NULL;
+		}
+		Py_RETURN_NONE;
+	}
+	T get_duration (T s, T a)
+	{
+		try {
+			fobject* f=(fobject*) s;
+			return PyLong_FromLong(f->fmtctx->duration ());
+		}catch(...)
+		{
+			PyErr_Format (PyExc_Exception,
+					"Can not seek any file so easily.");
+			return NULL;
+		}
+		Py_RETURN_NONE;
+	}
 	static PyMethodDef methods[]={
 		{"get_packet", get_packet, METH_VARARGS,
 			"Get a packet"},
 		{"send_frame",get_frames, METH_VARARGS,
 			"Get_frame"},
+		{"seek_duration",
+			seek_duration, METH_VARARGS,
+			"Seek AVFORMATCONTEXT"},
+		{"duration",
+			get_duration, METH_VARARGS,
+			"get_duration AVFORMATCONTEXT"},
 		{NULL, NULL, 0, NULL}
 	};
+	T get_frame (T s, T a)
+	{
+		PyObject* arg;
+		int index;
+		if (!PyArg_ParseTuple (a, "Oi", &arg, &index))
+			return NULL;
+		AVFrame* frame=(AVFrame*)PyCapsule_GetPointer (arg,
+				"_frame");
+		printf("%d %p %d (%d)\n",
+			frame->sample_rate,
+			frame->data,
+			frame->nb_samples,
+			index
+			);
+		printf("%p\n", frame);
+		Py_RETURN_NONE;
+	}
 	static PyTypeObject fobject_type ={
 		PyVarObject_HEAD_INIT (NULL, 0)
 		.tp_name="AVFormatContext",
@@ -430,10 +500,16 @@ namespace f
 	PyMODINIT_FUNC
 	PyInit_av ()
 	{
+		static PyMethodDef methods[]={
+			{"get_frame",
+			get_frame, METH_VARARGS,
+			"Get the AVFrame*;"},
+			{NULL, NULL, 0, NULL}
+		};
 		static struct PyModuleDef avv={
 			PyModuleDef_HEAD_INIT,
 			"audio_video",
-			0, -1, NULL
+			0, -1, methods
 		};
 
 		PyObject *ov=PyModule_Create (&avv);
@@ -449,6 +525,92 @@ namespace f
 		return ov;
 	}
 }
+/*
+struct f_graph {
+	struct _filter {
+		AVFilterContext *ctx{0};
+		int r;
+
+		operator AVFilterContext*&()
+		{
+			return ctx;
+		}
+
+		_filter (int s, AVFilterGraph* fg)
+		{
+			char buf[1054];
+			const AVFilter* f=avfilter_get_by_name ("abuffer");
+			AVCodec* e=avcodec_find_encoder (
+				AV_CODEC_ID_MP3);
+			uint64_t c_l;
+
+			for (const int *p=e->supported_samplerates;
+					p && *p<=0; p++)
+			{
+				if(rate<*p)
+					rate=*p;
+			}
+			c_l=*e->channel_layouts;
+			snprintf (buf, 1054,
+				  "time_base=%d/%d:sample_rate=%d:sample_fmt=%s:channel_layout=0x%llx",
+				  1, rate, rate,
+				  av_get_sample_fmt_name (*(e->sample_fmts)),
+				  c_l);
+
+			r = avfilter_graph_create_filter (&ctx,
+					f, "in", buf, 0, fg);
+			if (r<0)
+				throw r;
+		}
+	};
+	AVFilterGraph* graph;
+	vector<_filter> filters;
+	AVFilterContext* sink=NULL;
+
+	f_graph (int s)
+	{
+		const AVFilter* f=avfilter_get_by_name ("abuffersink");
+		AVCodec* e=avcodec_find_encoder (
+			AV_CODEC_ID_MP3);
+		static uint64_t c_l;
+
+		for (const int *p=e->supported_samplerates;
+				p && *p<=0; p++)
+		{
+			if(rate<*p)
+				rate=*p;
+		}
+		c_l=*e->channel_layouts;
+		sample_fmt=*(e->sample_fmts);
+		graph=avfilter_graph_alloc ();
+
+		for (int i=0; i<s; i++)
+		{
+			filters.push_back (_filter(i, graph));
+		}
+		r = avfilter_graph_create_filter (&sink, f,
+						  "out", NULL, NULL, graph);
+		    av_opt_set_bin (sink, "sample_rates",
+				    (uint8_t *) & rate,
+				    sizeof (rate),
+				    AV_OPT_SEARCH_CHILDREN);
+		    av_opt_set_bin (sink, "channel_layouts",
+				    (uint8_t *) & c_l,
+				    sizeof (c_l),
+				    AV_OPT_SEARCH_CHILDREN);
+		    av_opt_set_bin (sink, "sample_fmts",
+				    (uint8_t *) & sample_fmt,
+				    sizeof (sample_fmt), AV_OPT_SEARCH_CHILDREN);
+	}
+	AVFilterContext*& operator[](int index)
+	{
+		return filters[index];
+	}
+	~f_graph ()
+	{
+
+	}
+}; */
 
 auto main(int argsc, char **args) -> int
 {

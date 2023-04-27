@@ -14,10 +14,10 @@ class Format(fobject.Format):
                 break
     def __iter__(s):
         for i in s._get_packet ():
-            yield s.send_frame(i)
+            yield  s, s.send_frame(i)
             try:
                 while True:
-                    yield s.send_frame(None)
+                    yield s, s.send_frame(None)
             except EOFError:
                 pass
     def __repr__(s):
@@ -25,21 +25,40 @@ class Format(fobject.Format):
     pass
 def args():
     import sys
-    while True:
-        yield from iter(sys.argv[1:])
+    yield from iter(sys.argv[1:])
     pass
 import asyncio
-async def ugh():
-    try:
-        for i in args():
-            j=Format(i)
-            await asyncio.sleep(0.1)
-            print(j)
-            pass
-    except Exception:
-        print(len(x));
-        pass
-    pass
+import random
+async def rand(l):
+    return l[random.randint(0,len(l)-1)]
 
-for i in zip(*map (lambda x: Format(x), sys.argv[1:])):
-    print(i)
+async def Deck(tracks):
+    while True:
+        x=Format(await rand(tracks))
+        await asyncio.sleep(0)
+        for i in x:
+            yield x, i
+            await asyncio.sleep (0)
+
+async def deck1(x, cb, index):
+        y=Deck(x)
+        await asyncio.sleep(0)
+        async for x, i in y:
+            cb(i, index)
+            await asyncio.sleep(0)
+
+
+def just(i, x):
+    assert(type(x)==int)
+    assert(x>0)
+    y=iter (i)
+    while (x:=x-1)>=0:
+        yield next(y)
+
+async def main (cb, *args):
+    await asyncio.gather(*map(lambda x: deck1(list(args), cb, x), range(2)))
+
+def cbb(x, index):
+    (self, frame)=x
+    fobject.get_frame(frame, index)
+asyncio.run (main(cbb, *args()))
