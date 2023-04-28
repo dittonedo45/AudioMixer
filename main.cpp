@@ -16,8 +16,6 @@ extern "C" {
 };
 
 using namespace std;
-AVFilterContext *ctx1, *ctx2, *sink;
-AVCodecContext* enc;
 
 struct b_string : public string 
 {
@@ -55,6 +53,117 @@ struct a_find_stream_error : public a_exception {
 		return "Audio::Error: <a_find_stream_error>";
 	}
 };
+
+struct filter_gh
+{
+	AVFilterGraph *fg;
+	const AVFilter* f{avfilter_get_by_name ("abuffer")};
+	const AVFilter* fs{avfilter_get_by_name ("abuffersink")};
+	AVFilterContext *ctx1, *ctx2, *sink;
+	AVCodecContext* enc;
+	const AVCodec* e{avcodec_find_encoder (AV_CODEC_ID_MP3)};
+	int rate{44100};
+	int r;
+
+	AVFilterContext*& get_sink ()
+	{
+		return sink;
+	}
+	AVFilterContext*& get_src (int i)
+	{
+		if (i)
+		{
+			return ctx2;
+		}else{
+			return ctx1;
+		}
+	}
+
+	filter_gh () : fg(avfilter_graph_alloc ())
+	{
+		char buf[1054];
+		uint64_t c_l;
+
+		for (const int *p=e->supported_samplerates;
+				p && *p<=0; p++)
+		{
+			if(rate<*p)
+				rate=*p;
+		}
+		c_l=*e->channel_layouts;
+		enc=avcodec_alloc_context3 (e);
+		enc->time_base={1, rate};
+		enc->sample_fmt=*(e->sample_fmts);
+		enc->sample_rate=rate;
+		enc->channel_layout=c_l;
+
+		r=avcodec_open2(enc, e, NULL);
+		if (r<0) abort ();
+
+		snprintf (buf, 1054,
+			  "time_base=%d/%d:sample_rate=%d:sample_fmt=%s:channel_layout=0x%llx",
+			  1, rate, rate,
+			  av_get_sample_fmt_name (*(e->sample_fmts)),
+			  c_l);
+		static uint8_t sfff=*(e->sample_fmts);
+		r = avfilter_graph_create_filter (&ctx1,
+				f, "in1", buf, 0, fg);
+		if (r<0) abort ();
+		r = avfilter_graph_create_filter (&ctx2,
+				f, "in2", buf, 0, fg);
+		if (r<0) abort ();
+		r = avfilter_graph_create_filter (&sink, fs,
+						  "out", NULL, NULL, fg);
+		if (r<0) abort ();
+
+		AVFilterInOut *outs = avfilter_inout_alloc ();
+		AVFilterInOut *out = avfilter_inout_alloc ();
+		AVFilterInOut *ins = avfilter_inout_alloc ();
+
+		    av_opt_set_bin (sink, "sample_rates",
+				    (uint8_t *) & rate,
+				    sizeof (rate),
+				    AV_OPT_SEARCH_CHILDREN);
+		    av_opt_set_bin (sink, "channel_layouts",
+				    (uint8_t *) & c_l,
+				    sizeof (c_l),
+				    AV_OPT_SEARCH_CHILDREN);
+		    av_opt_set_bin (sink, "sample_fmts",
+				    (uint8_t *) &sfff,
+				    sizeof (c_l),
+				    AV_OPT_SEARCH_CHILDREN);
+
+		    outs->name = av_strdup ("in2");
+		    outs->filter_ctx = ctx1;
+		    outs->pad_idx = 0;
+		    outs->next = out;
+
+		    out->name = av_strdup ("in1");
+		    out->filter_ctx = ctx2;
+		    out->pad_idx = 0;
+		    out->next = NULL;
+
+		    ins->name = av_strdup ("out");
+		    ins->filter_ctx = sink;
+		    ins->pad_idx = 0;
+		    ins->next = 0;
+
+		    {
+		      r =
+			avfilter_graph_parse_ptr (fg, "[in1] lowpass, [in2]amerge, asetrate=44100*1.2[out]", &ins,
+						  &outs, 0);
+		      avfilter_inout_free (&ins);
+		      avfilter_inout_free (&outs);
+		    }
+		    if (r<0) abort();
+		    r = avfilter_graph_config (fg, NULL);
+		    if (r<0) abort();
+	}
+	~filter_gh ()
+	{
+		avfilter_graph_free (&fg);
+	}
+} ffg;
 
 struct Codec {
 	int ret, stream_index;
@@ -484,27 +593,22 @@ namespace f
 			return NULL;
 		AVFrame* frame=(AVFrame*)PyCapsule_GetPointer (arg,
 				"_frame");
-		if (index==0)
-		{
-			r=av_buffersrc_add_frame (ctx1, frame);
-		}else{
-			r=av_buffersrc_add_frame (ctx2, frame);
-		}
+		r=av_buffersrc_add_frame (ffg.get_src (index), frame);
 		if (r>=0)
 		{
 			AVFrame* frame=av_frame_alloc ();
 
 			do {
-				r = av_buffersink_get_frame_flags (sink,
+				r = av_buffersink_get_frame_flags (ffg.get_sink (),
 					      frame, 4);
 				if (r>=0)
 				{
-					r=avcodec_send_frame (enc, frame);
+					r=avcodec_send_frame (ffg.enc, frame);
 					if (r>=0)
 					{
 						AVPacket* pkt=av_packet_alloc ();
 						do{
-							if (avcodec_receive_packet (enc,
+							if (avcodec_receive_packet (ffg.enc,
 									pkt)) break;
 							fwrite(pkt->data,
 								pkt->size,
@@ -516,8 +620,6 @@ namespace f
 				}
 			}while (r>=0);
 			av_frame_free(&frame);
-			avfilter_graph_send_command (sink->graph,
-					"EOF", NULL, NULL, NULL, 0, 0);
 		}
 		Py_RETURN_NONE;
 	}
@@ -560,182 +662,13 @@ namespace f
 		return ov;
 	}
 }
-/*
-struct f_graph {
-	struct _filter {
-		AVFilterContext *ctx{0};
-		int r;
 
-		operator AVFilterContext*&()
-		{
-			return ctx;
-		}
 
-		_filter (int s, AVFilterGraph* fg)
-		{
-			char buf[1054];
-			const AVFilter* f=avfilter_get_by_name ("abuffer");
-			AVCodec* e=avcodec_find_encoder (
-				AV_CODEC_ID_MP3);
-			uint64_t c_l;
-
-			for (const int *p=e->supported_samplerates;
-					p && *p<=0; p++)
-			{
-				if(rate<*p)
-					rate=*p;
-			}
-			c_l=*e->channel_layouts;
-			snprintf (buf, 1054,
-				  "time_base=%d/%d:sample_rate=%d:sample_fmt=%s:channel_layout=0x%llx",
-				  1, rate, rate,
-				  av_get_sample_fmt_name (*(e->sample_fmts)),
-				  c_l);
-
-			r = avfilter_graph_create_filter (&ctx,
-					f, "in", buf, 0, fg);
-			if (r<0)
-				throw r;
-		}
-	};
-	AVFilterGraph* graph;
-	vector<_filter> filters;
-	AVFilterContext* sink=NULL;
-
-	f_graph (int s)
-	{
-		const AVFilter* f=avfilter_get_by_name ("abuffersink");
-		AVCodec* e=avcodec_find_encoder (
-			AV_CODEC_ID_MP3);
-		static uint64_t c_l;
-
-		for (const int *p=e->supported_samplerates;
-				p && *p<=0; p++)
-		{
-			if(rate<*p)
-				rate=*p;
-		}
-		c_l=*e->channel_layouts;
-		sample_fmt=*(e->sample_fmts);
-		graph=avfilter_graph_alloc ();
-
-		for (int i=0; i<s; i++)
-		{
-			filters.push_back (_filter(i, graph));
-		}
-		r = avfilter_graph_create_filter (&sink, f,
-						  "out", NULL, NULL, graph);
-		    av_opt_set_bin (sink, "sample_rates",
-				    (uint8_t *) & rate,
-				    sizeof (rate),
-				    AV_OPT_SEARCH_CHILDREN);
-		    av_opt_set_bin (sink, "channel_layouts",
-				    (uint8_t *) & c_l,
-				    sizeof (c_l),
-				    AV_OPT_SEARCH_CHILDREN);
-		    av_opt_set_bin (sink, "sample_fmts",
-				    (uint8_t *) & sample_fmt,
-				    sizeof (sample_fmt), AV_OPT_SEARCH_CHILDREN);
-	}
-	AVFilterContext*& operator[](int index)
-	{
-		return filters[index];
-	}
-	~f_graph ()
-	{
-
-	}
-}; */
 
 auto main(int argsc, char **args) -> int
 {
 	using namespace std;
-	AVFilterGraph *fg;
-	fg = avfilter_graph_alloc ();
-	int rate=44100;
-	int r;
-
-	char buf[1054];
-	const AVFilter* f=avfilter_get_by_name ("abuffer");
-	const AVFilter* fs=avfilter_get_by_name ("abuffersink");
-	AVCodec* e=avcodec_find_encoder (
-		AV_CODEC_ID_MP3);
-	uint64_t c_l;
-
-	for (const int *p=e->supported_samplerates;
-			p && *p<=0; p++)
-	{
-		if(rate<*p)
-			rate=*p;
-	}
-	c_l=*e->channel_layouts;
-	enc=avcodec_alloc_context3 (e);
-	enc->time_base={1, rate};
-	enc->sample_fmt=*(e->sample_fmts);
-	enc->sample_rate=rate;
-	enc->channel_layout=c_l;
-
-	r=avcodec_open2(enc, e, NULL);
-	if (r<0) abort ();
-
-	snprintf (buf, 1054,
-		  "time_base=%d/%d:sample_rate=%d:sample_fmt=%s:channel_layout=0x%llx",
-		  1, rate, rate,
-		  av_get_sample_fmt_name (*(e->sample_fmts)),
-		  c_l);
-	static uint8_t sfff=*(e->sample_fmts);
-	r = avfilter_graph_create_filter (&ctx1,
-			f, "in1", buf, 0, fg);
-	if (r<0) abort ();
-	r = avfilter_graph_create_filter (&ctx2,
-			f, "in2", buf, 0, fg);
-	if (r<0) abort ();
-	r = avfilter_graph_create_filter (&sink, fs,
-					  "out", NULL, NULL, fg);
-	if (r<0) abort ();
-
-	AVFilterInOut *outs = avfilter_inout_alloc ();
-	AVFilterInOut *out = avfilter_inout_alloc ();
-	AVFilterInOut *ins = avfilter_inout_alloc ();
-
-	    av_opt_set_bin (sink, "sample_rates",
-			    (uint8_t *) & rate,
-			    sizeof (rate),
-			    AV_OPT_SEARCH_CHILDREN);
-	    av_opt_set_bin (sink, "channel_layouts",
-			    (uint8_t *) & c_l,
-			    sizeof (c_l),
-			    AV_OPT_SEARCH_CHILDREN);
-	    av_opt_set_bin (sink, "sample_fmts",
-			    (uint8_t *) &sfff,
-			    sizeof (c_l),
-			    AV_OPT_SEARCH_CHILDREN);
-
-	    outs->name = av_strdup ("in2");
-	    outs->filter_ctx = ctx1;
-	    outs->pad_idx = 0;
-	    outs->next = out;
-
-	    out->name = av_strdup ("in1");
-	    out->filter_ctx = ctx2;
-	    out->pad_idx = 0;
-	    out->next = NULL;
-
-	    ins->name = av_strdup ("out");
-	    ins->filter_ctx = sink;
-	    ins->pad_idx = 0;
-	    ins->next = 0;
-
-	    {
-	      r =
-		avfilter_graph_parse_ptr (fg, "[in1] lowpass, [in2]amerge, asetrate=44100*1.2[out]", &ins,
-					  &outs, 0);
-	      avfilter_inout_free (&ins);
-	      avfilter_inout_free (&outs);
-	    }
-	    if (r<0) abort();
-	    r = avfilter_graph_config (fg, NULL);
-	    if (r<0) abort();
+	av_log_set_callback (0x0);
 	PyImport_AppendInittab ("fobject", &f::PyInit_av);
 	Py_InitializeEx (0);
 	Py_BytesMain (argsc, args);
