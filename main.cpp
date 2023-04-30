@@ -79,7 +79,8 @@ struct filter_gh
 		}
 	}
 
-	filter_gh () : fg(avfilter_graph_alloc ())
+	filter_gh (int numi, int numo,
+			b_string str) : fg(avfilter_graph_alloc ())
 	{
 		char buf[1054];
 		uint64_t c_l;
@@ -150,7 +151,7 @@ struct filter_gh
 
 		    {
 		      r =
-			avfilter_graph_parse_ptr (fg, "[in1] lowpass, [in2]amerge, asetrate=44100*1.2[out]", &ins,
+			avfilter_graph_parse_ptr (fg, str, &ins,
 						  &outs, 0);
 		      avfilter_inout_free (&ins);
 		      avfilter_inout_free (&outs);
@@ -163,7 +164,7 @@ struct filter_gh
 	{
 		avfilter_graph_free (&fg);
 	}
-} ffg;
+};
 
 struct Codec {
 	int ret, stream_index;
@@ -437,6 +438,125 @@ namespace packet
 	};
 }
 
+namespace filter {
+	struct fil_object {
+		PyObject_HEAD
+		filter_gh *fg;
+	};
+	using T=PyObject*;
+	T fil_object_new (PyTypeObject* t, T a, T k)
+	{
+		return t->tp_alloc(t, 0);
+	}
+	int fil_object_init (T t, T a, T k)
+	{
+		fil_object* fb=(fil_object*)t;
+		char *path;
+		int num_of_outputs=1;
+		int num_of_inputs=2;
+
+		if (!PyArg_ParseTuple (a, "s|ii", &path,
+					&num_of_inputs,
+					&num_of_outputs
+					))
+			return 1;
+//"[in1] lowpass, [in2]amerge, asetrate=44100*1.2[out]"
+		fb->fg=new filter_gh (num_of_inputs,
+				num_of_outputs,
+				path);
+		return 0;
+	}
+	void fil_object_dealloc (T o)
+	{
+		fil_object* f=(fil_object*) o;
+		delete f->fg;
+	}
+	T send_frame_to_src (T s, T a)
+	{
+		fil_object* f=(fil_object*) s;
+		T arg;
+		int index;
+
+		if (!PyArg_ParseTuple (a, "Oi", &arg, &index))
+			return NULL;
+		AVFrame *frame=(AVFrame*)
+			PyCapsule_GetPointer (arg, "_frame");
+		int r=av_buffersrc_add_frame(
+			f->fg->get_src (index),
+			frame);
+		return PyLong_FromLong (r);
+	}
+	T get_frame_from_sink (T s, T a)
+	{
+		fil_object* f=(fil_object*) s;
+
+		AVFrame* frame=av_frame_alloc ();
+		int
+		r = av_buffersink_get_frame_flags (
+				f->fg->get_sink (),
+				      frame, 4);
+		if (r<0)
+			return PyLong_FromLong (r);
+		return PyCapsule_New(frame, "_frame",
+				+[](T obj)
+			{
+				AVFrame* p=
+				(AVFrame*)
+				PyCapsule_GetPointer (obj, "_frame");
+				av_frame_free(&p);
+			});
+	}
+	T swallow (T s, T a)
+	{
+		fil_object* f=(fil_object*) s;
+		T arg;
+
+		if (!PyArg_ParseTuple (a, "O", &arg))
+			return NULL;
+		AVFrame *frame=(AVFrame*)
+			PyCapsule_GetPointer (arg, "_frame");
+
+		int
+		r=avcodec_send_frame (f->fg->enc, frame);
+		if (r<0)
+			return PyLong_FromLong(r);
+		AVPacket* pkt=av_packet_alloc ();
+		T res=PyList_New (0);
+		do{
+			if (avcodec_receive_packet (f->fg->enc,
+					pkt)) break;
+			PyList_Append(res,
+				PyBytes_FromStringAndSize
+				((const char*)pkt->data,
+				 pkt->size));
+		} while (1);
+		av_packet_free (&pkt);
+		return res;
+	}
+	static PyMethodDef methods[]={
+		{"send_frame_to_src",
+			send_frame_to_src, METH_VARARGS,
+			"send_frame_to_src"},
+		{"get_frame_from_sink",
+			get_frame_from_sink, METH_VARARGS,
+			"Get_frame"},
+		{"swallow",
+			swallow, METH_VARARGS,
+			"swallow!!"},
+		{NULL, NULL, 0, NULL}
+	};
+	static PyTypeObject fobject_type ={
+		PyVarObject_HEAD_INIT (NULL, 0)
+		.tp_name="AVFilterGraph",
+		.tp_init=fil_object_init,
+		.tp_dealloc=fil_object_dealloc,
+		.tp_new=fil_object_new,
+		.tp_methods=methods,
+		.tp_basicsize=sizeof(fil_object),
+		.tp_flags=Py_TPFLAGS_DEFAULT|Py_TPFLAGS_BASETYPE
+	};
+};
+
 namespace f
 {
 	struct fobject {
@@ -593,34 +713,6 @@ namespace f
 			return NULL;
 		AVFrame* frame=(AVFrame*)PyCapsule_GetPointer (arg,
 				"_frame");
-		r=av_buffersrc_add_frame (ffg.get_src (index), frame);
-		if (r>=0)
-		{
-			AVFrame* frame=av_frame_alloc ();
-
-			do {
-				r = av_buffersink_get_frame_flags (ffg.get_sink (),
-					      frame, 4);
-				if (r>=0)
-				{
-					r=avcodec_send_frame (ffg.enc, frame);
-					if (r>=0)
-					{
-						AVPacket* pkt=av_packet_alloc ();
-						do{
-							if (avcodec_receive_packet (ffg.enc,
-									pkt)) break;
-							fwrite(pkt->data,
-								pkt->size,
-								1, stdout);
-							fflush(stdout);
-						} while (1);
-						av_packet_free (&pkt);
-					}
-				}
-			}while (r>=0);
-			av_frame_free(&frame);
-		}
 		Py_RETURN_NONE;
 	}
 	static PyTypeObject fobject_type ={
@@ -653,17 +745,18 @@ namespace f
 
 		PyType_Ready (&fobject_type);
 		PyType_Ready (&packet::fobject_type);
+		PyType_Ready (&filter::fobject_type);
 
 		PyModule_AddObject (ov, "Format",
 				(T)&fobject_type);
 		PyModule_AddObject (ov, "Packet",
 				(T)&packet::fobject_type);
+		PyModule_AddObject (ov, "Filter",
+				(T)&filter::fobject_type);
 
 		return ov;
 	}
 }
-
-
 
 auto main(int argsc, char **args) -> int
 {
