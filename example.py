@@ -4,19 +4,26 @@ import asyncio
 import random
 import aiofiles
 
+async def run(*args):
+        loop=asyncio.get_running_loop ()
+        return await loop.run_in_executor(None, *args)
+
 class Format(fobject.Format):
     def __init__(s, *a, **kw):
         s.args=a
         (fobject.Format).__init__(s, *a, *kw)
         pass
-    def _get_packet(s):
+    async def _get_packet(s):
+        async def get_packet():
+            return await run(s.get_packet)
         while True:
             try:
-                yield s.get_packet ()
+                yield await get_packet ()
             except EOFError:
                 break
-    def __iter__(s):
-        for i in s._get_packet ():
+    async def __aiter__(s):
+        async for i in s._get_packet ():
+
             yield  s, s.send_frame(i)
             try:
                 while True:
@@ -32,29 +39,30 @@ def args():
     pass
 
 async def rand(l):
-    return l[random.randint(0,len(l)-1)]
+    loop=asyncio.get_running_loop()
+    async def randint(*x):
+        return await loop.run_in_executor (None, random.randint, *x)
+    s=l[await randint(0,len(l)-1)]
+    print(s)
+    return s
 
 async def Deck(tracks):
     while True:
-        x=Format(await rand(tracks))
-        await asyncio.sleep(0)
-        for i in x:
+        async def Format_(*x):
+            return await run(Format, *x)
+        x=await Format_(await rand(tracks))
+        async for i in x:
             yield x, i
-            await asyncio.sleep (0)
 
 main_filter=fobject.Filter("[in1] lowpass, [in2]amerge, asetrate=44100*1.2[out]")
 
 async def deck1(x, cb, index):
-        y=Deck(x)
-        await asyncio.sleep(0)
         std=aiofiles.stdout.buffer
-        async for x, i in y:
-            cb(i, index)
-            frame=main_filter.get_frame_from_sink ();
-            await asyncio.sleep(0)
+        async for x, i in Deck(x):
+            await cb(i, index)
+            frame=main_filter.get_frame_from_sink()
             if not (isinstance(frame, (int))):
                 for pkt in main_filter.swallow (frame):
-                    await asyncio.sleep(0)
                     std.write(pkt)
 
 
@@ -71,15 +79,15 @@ async def filter_switch():
     while True:
         await asyncio.sleep(19)
         if (i%2)==0:
-            for j in range(1,3):
+            for j in range(1,6):
                 main_filter=fobject.Filter(f"""[in1] lowpass,
-                    [in2]amerge, asetrate=44100*1.{j}[out]""")
-                await asyncio.sleep(4)
+                    [in2]amerge, asetrate=44100*1.1{j}[out]""")
+                await asyncio.sleep(j)
         else:
-            for j in range(1,3):
+            for j in range(1,6):
                 main_filter=fobject.Filter(f"""[in2] lowpass,
-                    [in1]amerge, asetrate=44100*1.{j}[out]""")
-                await asyncio.sleep(4)
+                    [in1]amerge, asetrate=44100*1.1{j}[out]""")
+                await asyncio.sleep(j)
         i=i+1
 
 async def main (cb, *args):
@@ -88,8 +96,8 @@ async def main (cb, *args):
         filter_switch()
         )
 
-def cbb(x, index):
+async def cbb(x, index):
     (self, frame)=x
-    main_filter.send_frame_to_src (frame, index);
+    main_filter.send_frame_to_src(frame, index)
 
 asyncio.run (main(cbb, *args()))
