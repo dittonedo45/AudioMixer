@@ -23,7 +23,7 @@ class Format(fobject.Format):
                 break
     async def __aiter__(s):
         async for i in s._get_packet ():
-
+            await asyncio.sleep(0)
             yield  s, s.send_frame(i)
             try:
                 while True:
@@ -53,17 +53,21 @@ async def Deck(tracks):
         x=await Format_(await rand(tracks))
         async for i in x:
             yield x, i
-
-main_filter=fobject.Filter("[in1] lowpass, [in2]amerge, asetrate=44100*1.2[out]")
+class Filter(fobject.Filter):
+    pass
+do_not_just_change=None
+main_filter=Filter("[in1] lowpass, [in2]amerge, asetrate=44100*1.2[out]")
 
 async def deck1(x, cb, index):
-        std=aiofiles.stdout.buffer
-        async for x, i in Deck(x):
-            await cb(i, index)
+    global do_not_just_change
+    std=aiofiles.stdout.buffer
+    async for x, i in Deck(x):
+        await cb(i, index)
+        async with do_not_just_change:
             frame=main_filter.get_frame_from_sink()
-            if not (isinstance(frame, (int))):
-                for pkt in main_filter.swallow (frame):
-                    std.write(pkt)
+        if not (isinstance(frame, (int))):
+            for pkt in main_filter.swallow (frame):
+                std.write(pkt)
 
 
 def just(i, x):
@@ -75,22 +79,47 @@ def just(i, x):
 
 async def filter_switch():
     global main_filter
+    global do_not_just_change
     i=0
     while True:
-        await asyncio.sleep(19)
+        #await asyncio.sleep(19)
         if (i%2)==0:
-            for j in range(1,6):
-                main_filter=fobject.Filter(f"""[in1] lowpass,
-                    [in2]amerge, asetrate=44100*1.1{j}[out]""")
-                await asyncio.sleep(j)
+            for j in range(100,300, 100):
+                async with do_not_just_change:
+                    main_filter=fobject.Filter(f"""[in1] lowpass,
+                        [in2]amerge, asetrate=44100*1.{j}[out]""")
+                await asyncio.sleep(0.8)
+            main_filter=fobject.Filter(f"""[in2] anullsink;
+                [in1]asetrate=44100*1.{j}[out]""")
+            await asyncio.sleep(80)
+            for j in range(100,300, -100):
+                async with do_not_just_change:
+                    main_filter=fobject.Filter(f"""[in1] lowpass,
+                        [in2]amerge, asetrate=44100*1.{j}[out]""")
+                await asyncio.sleep(0.8)
+            main_filter=fobject.Filter(f"""[in2] anullsink;
+                [in1]asetrate=44100*1.{j}[out]""")
         else:
-            for j in range(1,6):
-                main_filter=fobject.Filter(f"""[in2] lowpass,
-                    [in1]amerge, asetrate=44100*1.1{j}[out]""")
-                await asyncio.sleep(j)
+            for j in range(100,300, 100):
+                async with do_not_just_change:
+                    main_filter=fobject.Filter(f"""[in2] lowpass,
+                        [in1]amerge, asetrate=44100*1.{j}[out]""")
+                await asyncio.sleep(0.8)
+            main_filter=fobject.Filter(f"""[in1] anullsink;
+                [in2]asetrate=44100*1.{j}[out]""")
+            await asyncio.sleep(80)
+            for j in range(100,300, -100):
+                async with do_not_just_change:
+                    main_filter=fobject.Filter(f"""[in2] lowpass,
+                        [in1]amerge, asetrate=44100*1.{j}[out]""")
+                await asyncio.sleep(0.8)
+            main_filter=fobject.Filter(f"""[in1] anullsink;
+                [in2]asetrate=44100*1.{j}[out]""")
         i=i+1
 
 async def main (cb, *args):
+    global do_not_just_change
+    do_not_just_change=asyncio.Semaphore(2)
     await asyncio.gather(*map(lambda x: deck1(list(args),
         cb, x), range(2)),
         filter_switch()
