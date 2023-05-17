@@ -388,6 +388,17 @@ class  Format {
 	}
 
 };
+struct gil
+{
+	PyGILState_STATE state;
+	gil()
+		: state(PyGILState_Ensure ())
+	{
+	}
+	~gil(){
+		PyGILState_Release (state);
+	}
+};
 
 namespace packet
 {
@@ -404,16 +415,7 @@ namespace packet
 	{
 		PyGILState_STATE state=PyGILState_Ensure ();
 		fobject* fb=(fobject*)t;
-		struct gil
-		{
-			PyGILState_STATE state;
-			gil(){
-				state=PyGILState_Ensure ();
-			}
-			~gil(){
-				PyGILState_Release (state);
-			}
-		} g;
+		gil g;
 		fb->pkt=av_packet_alloc ();
 		if (!fb->pkt )
 		{
@@ -461,6 +463,7 @@ namespace filter {
 					))
 			return 1;
 //"[in1] lowpass, [in2]amerge, asetrate=44100*1.2[out]"
+		gil g;
 		fb->fg=new filter_gh (num_of_inputs,
 				num_of_outputs,
 				path);
@@ -481,9 +484,14 @@ namespace filter {
 			return NULL;
 		AVFrame *frame=(AVFrame*)
 			PyCapsule_GetPointer (arg, "_frame");
-		int r=av_buffersrc_add_frame(
-			f->fg->get_src (index),
-			frame);
+		int r=0;
+		{
+			gil g;
+			r=
+			av_buffersrc_add_frame(
+				f->fg->get_src (index),
+				frame);
+		}
 		return PyLong_FromLong (r);
 	}
 	T get_frame_from_sink (T s, T a)
@@ -491,10 +499,13 @@ namespace filter {
 		fil_object* f=(fil_object*) s;
 
 		AVFrame* frame=av_frame_alloc ();
-		int
-		r = av_buffersink_get_frame_flags (
-				f->fg->get_sink (),
-				      frame, 4);
+		int r;
+		{
+			gil g;
+			r = av_buffersink_get_frame_flags (
+					f->fg->get_sink (),
+					      frame, 4);
+		}
 		if (r<0)
 			return PyLong_FromLong (r);
 		return PyCapsule_New(frame, "_frame",
@@ -503,6 +514,7 @@ namespace filter {
 				AVFrame* p=
 				(AVFrame*)
 				PyCapsule_GetPointer (obj, "_frame");
+				gil g;
 				av_frame_free(&p);
 			});
 	}
@@ -516,21 +528,38 @@ namespace filter {
 		AVFrame *frame=(AVFrame*)
 			PyCapsule_GetPointer (arg, "_frame");
 
-		int
+		int r;
+		{
+		gil g;
 		r=avcodec_send_frame (f->fg->enc, frame);
+		}
 		if (r<0)
 			return PyLong_FromLong(r);
-		AVPacket* pkt=av_packet_alloc ();
+		AVPacket* pkt;
+		{
+		gil g;
+		pkt=av_packet_alloc ();
+		}
+		struct u {
+			AVPacket* pkt;
+			u(AVPacket* z):pkt(z){}
+			~u(){
+			gil g;
+			av_packet_free (&pkt);
+		}} u(pkt);
+
 		T res=PyList_New (0);
 		do{
+			{
+				gil g;
 			if (avcodec_receive_packet (f->fg->enc,
 					pkt)) break;
+			}
 			PyList_Append(res,
 				PyBytes_FromStringAndSize
 				((const char*)pkt->data,
 				 pkt->size));
 		} while (1);
-		av_packet_free (&pkt);
 		return res;
 	}
 	static PyMethodDef methods[]={
@@ -630,7 +659,6 @@ namespace f
 	}
 	T get_frames (T s, T a)
 	{
-		AVPacket *pkt(av_packet_alloc ());
 		T arg;
 		if (!PyArg_ParseTuple (a, "O", &arg))
 			return NULL;
@@ -653,6 +681,7 @@ namespace f
 					AVFrame* p=
 					(AVFrame*)
 					PyCapsule_GetPointer (obj, "_frame");
+					gil g;
 					av_frame_free(&p);
 				});
 		}catch(...)
@@ -669,6 +698,7 @@ namespace f
 			return NULL;
 		try {
 			fobject* f=(fobject*) s;
+					gil g;
 			f->fmtctx->seek (arg);
 		}catch(...)
 		{
