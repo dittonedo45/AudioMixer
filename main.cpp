@@ -16,6 +16,7 @@ extern "C" {
 };
 
 using namespace std;
+PyObject* Format_EOF(0);
 
 struct b_string : public string 
 {
@@ -59,7 +60,7 @@ struct filter_gh
 	AVFilterGraph *fg;
 	const AVFilter* f{avfilter_get_by_name ("abuffer")};
 	const AVFilter* fs{avfilter_get_by_name ("abuffersink")};
-	AVFilterContext *ctx1, *ctx2, *sink;
+	AVFilterContext *ctx[2], *sink;
 	AVCodecContext* enc;
 	const AVCodec* e{avcodec_find_encoder (AV_CODEC_ID_MP3)};
 	int rate{44100};
@@ -73,10 +74,25 @@ struct filter_gh
 	{
 		if (i)
 		{
-			return ctx2;
+			return ctx[1];
 		}else{
-			return ctx1;
+			return ctx[0];
 		}
+	}
+
+	AVFilterInOut *inout_layers(int n)
+	{
+		AVFilterInOut* res=avfilter_inout_alloc ();
+		AVFilterInOut* sp=res;
+		AVFilterInOut* p;
+
+		for (int i(0); i<n; i++)
+		{
+			p=res;
+			res=avfilter_inout_alloc ();
+			p->next=res;
+		}
+		return sp;
 	}
 
 	filter_gh (int numi, int numo,
@@ -107,18 +123,25 @@ struct filter_gh
 			  av_get_sample_fmt_name (*(e->sample_fmts)),
 			  c_l);
 		static uint8_t sfff=*(e->sample_fmts);
-		r = avfilter_graph_create_filter (&ctx1,
-				f, "in1", buf, 0, fg);
-		if (r<0) abort ();
-		r = avfilter_graph_create_filter (&ctx2,
-				f, "in2", buf, 0, fg);
-		if (r<0) abort ();
+		AVFilterInOut *outs = inout_layers(2), *o;
+		AVFilterInOut* pp=outs;
+		for (AVFilterContext** p=ctx; p<&ctx[2]; p++)
+		{
+			char pbuf[1054];
+			snprintf (pbuf, 1054,
+				"in%d", (&ctx[2])-p);
+			r = avfilter_graph_create_filter (p,
+					f, pbuf, buf, 0, fg);
+			if (r<0) abort ();
+			pp->name=av_strdup (pbuf);
+			pp->filter_ctx=*p;
+			pp->pad_idx=0;
+			pp=pp->next;
+		}
 		r = avfilter_graph_create_filter (&sink, fs,
 						  "out", NULL, NULL, fg);
 		if (r<0) abort ();
 
-		AVFilterInOut *outs = avfilter_inout_alloc ();
-		AVFilterInOut *out = avfilter_inout_alloc ();
 		AVFilterInOut *ins = avfilter_inout_alloc ();
 
 		    av_opt_set_bin (sink, "sample_rates",
@@ -133,16 +156,6 @@ struct filter_gh
 				    (uint8_t *) &sfff,
 				    sizeof (c_l),
 				    AV_OPT_SEARCH_CHILDREN);
-
-		    outs->name = av_strdup ("in2");
-		    outs->filter_ctx = ctx1;
-		    outs->pad_idx = 0;
-		    outs->next = out;
-
-		    out->name = av_strdup ("in1");
-		    out->filter_ctx = ctx2;
-		    out->pad_idx = 0;
-		    out->next = NULL;
 
 		    ins->name = av_strdup ("out");
 		    ins->filter_ctx = sink;
@@ -652,7 +665,7 @@ namespace f
 					});
 		}catch(...)
 		{
-			PyErr_Format (PyExc_EOFError,
+			PyErr_Format (Format_EOF,
 					"reached end of file");
 			return NULL;
 		}
@@ -770,6 +783,7 @@ namespace f
 			"audio_video",
 			0, -1, methods
 		};
+		using t=PyObject*;
 
 		PyObject *ov=PyModule_Create (&avv);
 
@@ -777,8 +791,19 @@ namespace f
 		PyType_Ready (&packet::fobject_type);
 		PyType_Ready (&filter::fobject_type);
 
+		if (!Format_EOF)
+		{
+		Format_EOF=PyErr_NewException (
+				"fobject.EOF",
+				PyExc_Exception,
+				PyDict_New ()
+				);
+		}
+		Py_XINCREF (Format_EOF);
+		PyModule_AddObject (ov, "EOF",
+				Format_EOF);
 		PyModule_AddObject (ov, "Format",
-				(T)&fobject_type);
+				(t)&fobject_type);
 		PyModule_AddObject (ov, "Packet",
 				(T)&packet::fobject_type);
 		PyModule_AddObject (ov, "Filter",

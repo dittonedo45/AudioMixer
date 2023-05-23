@@ -19,8 +19,8 @@ class Format(fobject.Format):
         while True:
             try:
                 yield await get_packet ()
-            except EOFError:
-                break
+            except fobject.EOF:
+                return
     async def __aiter__(s):
         async for i in s._get_packet ():
             await asyncio.sleep(0)
@@ -82,7 +82,7 @@ async def filter_switch():
     global do_not_just_change
     i=0
     while True:
-        #await asyncio.sleep(19)
+        await asyncio.sleep(19)
         if (i%2)==0:
             for j in range(100,300, 100):
                 async with do_not_just_change:
