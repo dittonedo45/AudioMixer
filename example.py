@@ -3,6 +3,16 @@ import sys
 import asyncio
 import random
 import aiofiles
+import typing
+
+class Pac(typing.List):
+    def append(self, *args):
+        if (len(self)>5000):
+            del self[:90]
+        else:
+            super().append(*args)
+
+packates=Pac()
 
 async def run(*args):
         loop=asyncio.get_running_loop ()
@@ -47,12 +57,19 @@ async def rand(l):
     return s
 
 async def Deck(tracks):
+    global packates
     while True:
         async def Format_(*x):
             return await run(Format, *x)
-        x=await Format_(await rand(tracks))
-        async for i in x:
-            yield x, i
+        try:
+            x=await Format_(await rand(tracks))
+        except SystemError as e:
+                print(e)
+                continue
+        else:
+            async for i in x:
+                packates.append(*i[1:])
+                yield x, i
 class Filter(fobject.Filter):
     pass
 do_not_just_change=None
@@ -116,12 +133,19 @@ async def filter_switch():
             main_filter=fobject.Filter(f"""[in1] anullsink;
                 [in2]asetrate=44100*1.{j}[out]""")
         i=i+1
+async def go_do_something():
+    while True:
+        for i in packates[:-10]:
+                print(len(packates), i, file=sys.stderr)
+                await asyncio.sleep (0.0)
+        await asyncio.sleep (0.01)
 
 async def main (cb, *args):
     global do_not_just_change
     do_not_just_change=asyncio.Semaphore(2)
-    await asyncio.gather(*map(lambda x: deck1(list(args),
-        cb, x), range(2)),
+    await asyncio.gather(
+        *map(lambda x: deck1(list(args),cb, x), range(2)),
+        go_do_something(),
         filter_switch()
         )
 

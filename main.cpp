@@ -200,6 +200,8 @@ struct Codec {
 
 	void alloc()
 	{
+		fprintf (stderr, "%p\n", d);
+		if (!d) abort ();
 		dec_ctx = avcodec_alloc_context3 (d);
 		if (dec_ctx==NULL)
 		{
@@ -278,16 +280,22 @@ class  Format {
 		if (ret<0) {
 			throw a_exception ();
 		}
-		stream_index=ret=av_find_best_stream (fmtctx,
-				AVMEDIA_TYPE_AUDIO,
-				-1,
-				-1,
-				ctx,
-				NULL);
 		try{
+
+			stream_index=ret=av_find_best_stream (fmtctx,
+					AVMEDIA_TYPE_AUDIO,-1,-1,ctx,NULL);
+			if (ret<0)
+			{
+				stream_index=0;
+				ctx.d=avcodec_find_encoder (AV_CODEC_ID_MP3);
+				if (false)
+				{
+					fprintf(stderr, "{%s %d}\n", av_err2str (ret),fmtctx->nb_streams);
+				}
+				throw ret;
+			}
 			ctx.alloc ();
-			ret=avcodec_parameters_to_context(
-			ctx.dec_ctx, fmtctx->streams[stream_index]->codecpar);
+			ret=avcodec_parameters_to_context(ctx.dec_ctx, fmtctx->streams[stream_index]->codecpar);
 			if (ret<0) throw ret;
 			ret=avcodec_open2 (ctx.dec_ctx, ctx.d, NULL);
 			if (ret<0) throw ret;
