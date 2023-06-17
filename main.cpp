@@ -63,8 +63,12 @@ struct filter_gh
 	AVFilterContext *ctx[2], *sink;
 	AVCodecContext* enc;
 	const AVCodec* e{avcodec_find_encoder (AV_CODEC_ID_MP3)};
+	AVFilterInOut *ins;
+	AVFilterInOut *outs;
 	int rate{44100};
+	char buf[1054];
 	int r;
+	uint64_t c_l;
 
 	AVFilterContext*& get_sink ()
 	{
@@ -95,12 +99,8 @@ struct filter_gh
 		return sp;
 	}
 
-	filter_gh (int numi, int numo,
-			b_string str) : fg(avfilter_graph_alloc ())
+	void alloc_codec ()
 	{
-		char buf[1054];
-		uint64_t c_l;
-
 		for (const int *p=e->supported_samplerates;
 				p && *p<=0; p++)
 		{
@@ -116,20 +116,17 @@ struct filter_gh
 
 		r=avcodec_open2(enc, e, NULL);
 		if (r<0) abort ();
+	}
 
-		snprintf (buf, 1054,
-			  "time_base=%d/%d:sample_rate=%d:sample_fmt=%s:channel_layout=0x%llx",
-			  1, rate, rate,
-			  av_get_sample_fmt_name (*(e->sample_fmts)),
-			  c_l);
-		static uint8_t sfff=*(e->sample_fmts);
-		AVFilterInOut *outs = inout_layers(2), *o;
+	void prepare_inouts ()
+	{
 		AVFilterInOut* pp=outs;
 		for (AVFilterContext** p=ctx; p<&ctx[2]; p++)
 		{
 			char pbuf[1054];
 			snprintf (pbuf, 1054,
 				"in%d", (&ctx[2])-p);
+			if (!pp) break;
 			r = avfilter_graph_create_filter (p,
 					f, pbuf, buf, 0, fg);
 			if (r<0) abort ();
@@ -138,12 +135,14 @@ struct filter_gh
 			pp->pad_idx=0;
 			pp=pp->next;
 		}
+	}
+
+	void prepare_final ()
+	{
+		static uint8_t sfff=*(e->sample_fmts);
 		r = avfilter_graph_create_filter (&sink, fs,
 						  "out", NULL, NULL, fg);
 		if (r<0) abort ();
-
-		AVFilterInOut *ins = avfilter_inout_alloc ();
-
 		    av_opt_set_bin (sink, "sample_rates",
 				    (uint8_t *) & rate,
 				    sizeof (rate),
@@ -161,21 +160,45 @@ struct filter_gh
 		    ins->filter_ctx = sink;
 		    ins->pad_idx = 0;
 		    ins->next = 0;
+	}
 
-		    {
-		      r =
-			avfilter_graph_parse_ptr (fg, str, &ins,
-						  &outs, 0);
-		      avfilter_inout_free (&ins);
-		      avfilter_inout_free (&outs);
-		    }
-		    if (r<0) abort();
+	filter_gh () : fg(avfilter_graph_alloc ()), outs(inout_layers(2)), ins(avfilter_inout_alloc ())
+	{
+
+		alloc_codec ();
+		snprintf (buf, 1054,
+			  "time_base=%d/%d:sample_rate=%d:sample_fmt=%s:channel_layout=0x%llx",
+			  1, rate, rate,
+			  av_get_sample_fmt_name (*(e->sample_fmts)),
+			  c_l);
+	}
+	void config ()
+	{
 		    r = avfilter_graph_config (fg, NULL);
-		    if (r<0) abort();
+		    if (r<0)
+		    {
+			    throw r;
+		    }
+	}
+	void parse_and_config (b_string str)
+	{
+		avfilter_graph_free (&fg);
+		outs=inout_layers(2);
+		ins=avfilter_inout_alloc ();
+
+		fg=avfilter_graph_alloc ();
+		prepare_inouts ();
+		prepare_final ();
+	      r =avfilter_graph_parse_ptr (fg, str, &ins, &outs, 0);
+	      if (r<0) throw r;
+
+	      config ();
 	}
 	~filter_gh ()
 	{
 		avfilter_graph_free (&fg);
+		avfilter_inout_free (&ins);
+		avfilter_inout_free (&outs);
 	}
 };
 
@@ -200,7 +223,6 @@ struct Codec {
 
 	void alloc()
 	{
-		fprintf (stderr, "%p\n", d);
 		if (!d) abort ();
 		dec_ctx = avcodec_alloc_context3 (d);
 		if (dec_ctx==NULL)
@@ -218,7 +240,7 @@ struct Codec {
 
 struct OSPacket : public exception {};
 
-class  Format {
+class Format {
 	public:
 	AVFormatContext* fmtctx{NULL};
 	int ret, stream_index, rchd_end{0};
@@ -226,7 +248,17 @@ class  Format {
 	int channels{0};
 	Codec ctx;
 	SwrContext* swr{NULL};
-	AVPacket* pkt{av_packet_alloc()};
+	struct _pkt {
+		AVPacket* pkt{av_packet_alloc()};
+		operator AVPacket*&(){
+			return pkt;
+		}
+		~_pkt ()
+		{
+			av_packet_free (&pkt);
+		}
+
+	} pkt;
 	AVCodecContext* enc;
 
 	operator int()
@@ -315,7 +347,6 @@ class  Format {
 				abort ();
 		} catch (a_ins_mem& exp)
 		{
-			cerr<<exp.what()<<endl;
 			throw;
 		}
 	}
@@ -475,25 +506,29 @@ namespace filter {
 	{
 		fil_object* fb=(fil_object*)t;
 		char *path;
-		int num_of_outputs=1;
-		int num_of_inputs=2;
 
-		if (!PyArg_ParseTuple (a, "s|ii", &path,
-					&num_of_inputs,
-					&num_of_outputs
-					))
+		if (!PyArg_ParseTuple (a, "s", &path))
 			return 1;
-//"[in1] lowpass, [in2]amerge, asetrate=44100*1.2[out]"
-		gil g;
-		fb->fg=new filter_gh (num_of_inputs,
-				num_of_outputs,
-				path);
+		fb->fg=new filter_gh ();
+		fb->fg->parse_and_config (b_string (path));
 		return 0;
 	}
 	void fil_object_dealloc (T o)
 	{
 		fil_object* f=(fil_object*) o;
 		delete f->fg;
+	}
+	T insert_fg (T s, T a)
+	{
+		char *farg;
+		fil_object* f=(fil_object*) s;
+
+		if (!PyArg_ParseTuple (a, "s", &farg))
+			return NULL;
+
+		f->fg->parse_and_config (b_string (farg));
+
+		Py_RETURN_NONE;
 	}
 	T send_frame_to_src (T s, T a)
 	{
@@ -503,6 +538,7 @@ namespace filter {
 
 		if (!PyArg_ParseTuple (a, "Oi", &arg, &index))
 			return NULL;
+		Py_XINCREF (arg);
 		AVFrame *frame=(AVFrame*)
 			PyCapsule_GetPointer (arg, "_frame");
 		int r=0;
@@ -546,6 +582,7 @@ namespace filter {
 
 		if (!PyArg_ParseTuple (a, "O", &arg))
 			return NULL;
+		Py_XINCREF (arg);
 		AVFrame *frame=(AVFrame*)
 			PyCapsule_GetPointer (arg, "_frame");
 
@@ -576,6 +613,7 @@ namespace filter {
 			if (avcodec_receive_packet (f->fg->enc,
 					pkt)) break;
 			}
+			Py_XINCREF (res);
 			PyList_Append(res,
 				PyBytes_FromStringAndSize
 				((const char*)pkt->data,
@@ -590,6 +628,9 @@ namespace filter {
 		{"get_frame_from_sink",
 			get_frame_from_sink, METH_VARARGS,
 			"Get_frame"},
+		{"parse_and_config",
+			insert_fg, METH_VARARGS,
+			"parse and config"},
 		{"swallow",
 			swallow, METH_VARARGS,
 			"swallow!!"},
@@ -628,16 +669,6 @@ namespace f
 			return 1;
 		PyGILState_STATE state=PyGILState_Ensure ();
 		try{
-			struct gil
-			{
-				PyGILState_STATE state;
-				gil(){
-					state=PyGILState_Ensure ();
-				}
-				~gil(){
-					PyGILState_Release (state);
-				}
-			} g;
 			fb->fmtctx=new Format(path);
 		}catch(a_exception& exp)
 		{
@@ -688,6 +719,7 @@ namespace f
 
 			if (arg!=Py_None)
 			{
+				Py_XINCREF (arg);
 				f->fmtctx->set_frame (
 					(AVPacket*)
 					PyCapsule_GetPointer(arg, "_packet")
@@ -701,7 +733,8 @@ namespace f
 				{
 					AVFrame* p=
 					(AVFrame*)
-					PyCapsule_GetPointer (obj, "_frame");
+					PyCapsule_GetPointer (obj,
+							"_frame");
 					gil g;
 					av_frame_free(&p);
 				});
@@ -762,10 +795,33 @@ namespace f
 		int r;
 		if (!PyArg_ParseTuple (a, "Oi", &arg, &index))
 			return NULL;
+		Py_XINCREF (arg);
 		AVFrame* frame=(AVFrame*)PyCapsule_GetPointer (arg,
 				"_frame");
 		Py_RETURN_NONE;
 	}
+	T show_all_bytes (T s, T a)
+	{
+		PyObject* arg;
+		if (!PyArg_ParseTuple (a, "O", &arg))
+			return NULL;
+		Py_XINCREF (arg);
+		AVFrame* frame=(AVFrame*)PyCapsule_GetPointer (arg,
+				"_frame");
+		T res=PyDict_New ();
+		if (frame)
+		{
+			PyDict_SetItemString (res, "nb_samples", Py_BuildValue ("i", frame->nb_samples));
+			PyDict_SetItemString (res, "format", Py_BuildValue ("i", frame->format));
+			PyDict_SetItemString (res, "pts", PyLong_FromLongLong (frame->pts));
+			PyDict_SetItemString (res, "channels", PyLong_FromLongLong (frame->channels));
+			PyDict_SetItemString (res, "pkt_duration", PyLong_FromLongLong (frame->pkt_duration));
+			PyDict_SetItemString (res, "channel_layout", PyLong_FromLongLong (frame->channel_layout));
+			PyDict_SetItemString (res, "sample_rate", Py_BuildValue ("i", frame->sample_rate));
+		}
+		return res;
+	}
+
 	static PyTypeObject fobject_type ={
 		PyVarObject_HEAD_INIT (NULL, 0)
 		.tp_name="AVFormatContext",
@@ -781,6 +837,9 @@ namespace f
 	PyInit_av ()
 	{
 		static PyMethodDef methods[]={
+			{"show_all_bytes",
+			show_all_bytes, METH_VARARGS,
+			"Get the AVFrame*;"},
 			{"get_frame",
 			get_frame, METH_VARARGS,
 			"Get the AVFrame*;"},
@@ -824,7 +883,7 @@ namespace f
 auto main(int argsc, char **args) -> int
 {
 	using namespace std;
-	av_log_set_callback (0x0);
+	//av_log_set_callback (0x0);
 	PyImport_AppendInittab ("fobject", &f::PyInit_av);
 	Py_InitializeEx (0);
 	Py_BytesMain (argsc, args);
