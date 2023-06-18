@@ -824,7 +824,7 @@ namespace f
 auto main(int argsc, char **args) -> int
 {
 	using namespace std;
-	av_log_set_callback (0x0);
+	av_log_set_level (AV_LOG_DEBUG|AV_LOG_TRACE|AV_LOG_VERBOSE);
 	PyImport_AppendInittab ("fobject", &f::PyInit_av);
 	Py_InitializeEx (0);
 	Py_BytesMain (argsc, args);
