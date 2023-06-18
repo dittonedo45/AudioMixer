@@ -73,17 +73,30 @@ async def Deck(tracks):
                 packates.append(*i[1:])
                 yield x, i
 class Filter(fobject.Filter):
+    def __init__(s, *arg):
+        s.dnjc=asyncio.Semaphore (1)
+        super().__init__ (*arg)
+    async def send_frame_to_src (s, frame, index):
+        async with s.dnjc:
+            fobject.Filter.send_frame_to_src(s, frame, index)
+    async def get_frame_from_sink (s):
+        async with s.dnjc:
+            while True:
+                frame=fobject.Filter.get_frame_from_sink(s)
+                if (isinstance(frame, (int))):
+                    break
+                yield frame
+
     async def parse_and_config (*arg):
         fobject.Filter.parse_and_config(*arg)
 
 async def deck1(main_filter, x, index):
     std=aiofiles.stdout.buffer
     async for x, i in Deck(x):
-        main_filter.send_frame_to_src(i[1], index)
-        frame=main_filter.get_frame_from_sink()
-        if not (isinstance(frame, (int))):
-            for pkt in main_filter.swallow (frame):
-                std.write(pkt)
+        await main_filter.send_frame_to_src(i[1], index)
+        async for frame in main_filter.get_frame_from_sink():
+                for pkt in main_filter.swallow (frame):
+                    std.write(pkt)
 
 
 def just(i, x):
@@ -96,36 +109,15 @@ def just(i, x):
 async def filter_switch(main_filter):
     i=0
     while True:
-        #await asyncio.sleep(19)
-        if (i%2)==0:
-            for j in range(100,300, 100):
-                await main_filter.parse_and_config(f"""[in1] lowpass,
-                        [in2]amerge, asetrate=44100*1.{j}[out]""")
-                await asyncio.sleep(0.8)
-            await main_filter.parse_and_config(f"""[in2] anullsink;
-                [in1]asetrate=44100*1.{j}[out]""")
-            await asyncio.sleep(1)
-            for j in range(100,300, -100):
-                await main_filter.parse_and_config(f"""[in1] lowpass,
-                        [in2]amerge, asetrate=44100*1.{j}[out]""")
-                await asyncio.sleep(0.8)
-            await main_filter.parse_and_config(f"""[in2] anullsink;
-                [in1]asetrate=44100*1.{j}[out]""")
-        else:
-            for j in range(100,300, 100):
-                await main_filter.parse_and_config(f"""[in2] lowpass,
-                        [in1]amerge, asetrate=44100*1.{j}[out]""")
-                await asyncio.sleep(0.8)
-            await main_filter.parse_and_config(f"""[in1] anullsink;
-                [in2]asetrate=44100*1.{j}[out]""")
-            await asyncio.sleep(1)
-            for j in range(100,300, -100):
-                await main_filter.parse_and_config(f"""[in2] lowpass,
-                        [in1]amerge, asetrate=44100*1.{j}[out]""")
-                await asyncio.sleep(0.8)
-            await main_filter.parse_and_config(f"""[in1] anullsink;
-                [in2]asetrate=44100*1.{j}[out]""")
+        f="in1" if (i%2)==0 else "in2"
+        s="in2" if (i%2)==0 else "in1"
         i=i+1
+        for j in range(100,300, 50):
+            await main_filter.parse_and_config(f"""[{f}] lowpass,
+                    [{s}]amerge, asetrate=44100*1.{j}[out]""")
+            await asyncio.sleep(3.1)
+        await asyncio.sleep(19)
+
 async def go_do_something():
     while True:
         for i in packates[:-10]:
