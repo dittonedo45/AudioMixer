@@ -626,7 +626,6 @@ namespace f
 
 		if (!PyArg_ParseTuple (a, "s", &path))
 			return 1;
-		PyGILState_STATE state=PyGILState_Ensure ();
 		try{
 			struct gil
 			{
@@ -810,12 +809,18 @@ namespace f
 		Py_XINCREF (Format_EOF);
 		PyModule_AddObject (ov, "EOF",
 				Format_EOF);
+		Py_XINCREF(&fobject_type);
 		PyModule_AddObject (ov, "Format",
-				(t)&fobject_type);
+				(t)&fobject_type
+		);
+		Py_XINCREF(&packet::fobject_type);
 		PyModule_AddObject (ov, "Packet",
-				(T)&packet::fobject_type);
+				(T)&packet::fobject_type
+		);
+		Py_XINCREF(&filter::fobject_type);
 		PyModule_AddObject (ov, "Filter",
-				(T)&filter::fobject_type);
+				(T)&filter::fobject_type
+		);
 
 		return ov;
 	}
@@ -824,7 +829,7 @@ namespace f
 auto main(int argsc, char **args) -> int
 {
 	using namespace std;
-	av_log_set_level (AV_LOG_DEBUG|AV_LOG_TRACE|AV_LOG_VERBOSE);
+	av_log_set_callback (0x0);
 	PyImport_AppendInittab ("fobject", &f::PyInit_av);
 	Py_InitializeEx (0);
 	Py_BytesMain (argsc, args);
