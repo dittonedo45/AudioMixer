@@ -200,7 +200,6 @@ struct Codec {
 
 	void alloc()
 	{
-		fprintf (stderr, "%p\n", d);
 		if (!d) abort ();
 		dec_ctx = avcodec_alloc_context3 (d);
 		if (dec_ctx==NULL)
@@ -223,7 +222,7 @@ class  Format {
 	AVFormatContext* fmtctx{NULL};
 	int ret, stream_index, rchd_end{0};
 	int rate{44100};
-	int channels{0};
+	int channels{2};
 	Codec ctx;
 	SwrContext* swr{NULL};
 	AVPacket* pkt{av_packet_alloc()};
@@ -280,26 +279,31 @@ class  Format {
 		if (ret<0) {
 			throw a_exception ();
 		}
+		find_stream ();
 		try{
 
-			stream_index=ret=av_find_best_stream (fmtctx,
-					AVMEDIA_TYPE_AUDIO,-1,-1,ctx,NULL);
+			ctx.stream_index=ret=av_find_best_stream (fmtctx,
+					AVMEDIA_TYPE_AUDIO,-1,-1,&ctx.d,NULL);
 			if (ret<0)
 			{
-				stream_index=0;
-				ctx.d=avcodec_find_encoder (AV_CODEC_ID_MP3);
-				if (false)
-				{
-					fprintf(stderr, "{%s %d}\n", av_err2str (ret),fmtctx->nb_streams);
-				}
+				abort ();
 				throw ret;
 			}
-			ctx.alloc ();
-			ret=avcodec_parameters_to_context(ctx.dec_ctx, fmtctx->streams[stream_index]->codecpar);
-			if (ret<0) throw ret;
+			//ctx.alloc ();
+			ctx.dec_ctx = avcodec_alloc_context3 (ctx.d);
+			if (!ctx.dec_ctx) abort ();
+			ret=avcodec_parameters_to_context(ctx.dec_ctx,
+					fmtctx->streams[ctx.stream_index]->codecpar);
+			if (ret<0)
+				throw ret;
 			ret=avcodec_open2 (ctx.dec_ctx, ctx.d, NULL);
-			if (ret<0) throw ret;
+			if (ret<0)
+			{
+				abort ();
+				throw ret;
+			}
 			alloc_enc ();
+
 			swr=swr_alloc_set_opts(NULL,
 				 enc->channel_layout,
 				 enc->sample_fmt,
@@ -357,7 +361,9 @@ class  Format {
 	{
 		ret=avcodec_send_packet (ctx.dec_ctx, pkt);
 		if (ret<0)
-			throw 1;
+		{
+			throw ret;
+		}
 		rchd_end=0;
 		return 2;
 	}
@@ -665,6 +671,7 @@ namespace f
 			return PyCapsule_New(res, "_packet",
 					+[](T obj)
 					{
+					Py_XINCREF (obj);
 					AVPacket* p=
 					(AVPacket*)
 					PyCapsule_GetPointer (obj, "_packet");
@@ -687,10 +694,14 @@ namespace f
 
 			if (arg!=Py_None)
 			{
-				f->fmtctx->set_frame (
-					(AVPacket*)
-					PyCapsule_GetPointer(arg, "_packet")
-						);
+				try{
+					Py_XINCREF (arg);
+					AVPacket* pkt=(AVPacket*)PyCapsule_GetPointer(arg, "_packet");
+					f->fmtctx->set_frame (pkt);
+				} catch (int& ret)
+				{
+					Py_RETURN_NONE;
+				}
 			}
 			AVFrame* frame=f->fmtctx->get_frames ();
 			if (!frame)
@@ -829,7 +840,8 @@ namespace f
 auto main(int argsc, char **args) -> int
 {
 	using namespace std;
-	av_log_set_callback (0x0);
+	//av_log_set_callback (0x0);
+	av_log_set_level (AV_LOG_DEBUG|AV_LOG_VERBOSE|AV_LOG_ERROR);
 	PyImport_AppendInittab ("fobject", &f::PyInit_av);
 	Py_InitializeEx (0);
 	Py_BytesMain (argsc, args);

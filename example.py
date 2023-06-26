@@ -19,6 +19,7 @@ async def run(*args):
 class Format(fobject.Format):
     def __init__(s, *a, **kw):
         s.args=a
+        print(a,file=sys.stderr)
         (fobject.Format).__init__(s, *a, *kw)
         pass
     async def _get_packet(s):
@@ -32,7 +33,10 @@ class Format(fobject.Format):
     async def __aiter__(s):
         async for i in s._get_packet ():
             await asyncio.sleep(0)
-            yield  s, s.send_frame(i)
+            pkt=s.send_frame(i)
+            if not pkt:
+                continue
+            yield s, pkt
             try:
                 while True:
                     yield s, s.send_frame(None)
