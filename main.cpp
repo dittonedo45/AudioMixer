@@ -100,6 +100,7 @@ struct filter_gh
 	{
 		char buf[1054];
 		uint64_t c_l;
+		// TODO delegate
 
 		for (const int *p=e->supported_samplerates;
 				p && *p<=0; p++)
@@ -240,6 +241,7 @@ class  Format {
 	{}
 	void alloc_enc()
 	{
+		// TODO create a structure for this.
 		AVCodec* e=avcodec_find_encoder (
 			AV_CODEC_ID_MP3);
 		enc=avcodec_alloc_context3 (e);
@@ -280,6 +282,7 @@ class  Format {
 			throw a_exception ();
 		}
 		find_stream ();
+		// TODO delegate the work of this part.
 		try{
 
 			ctx.stream_index=ret=av_find_best_stream (fmtctx,
@@ -840,8 +843,7 @@ namespace f
 auto main(int argsc, char **args) -> int
 {
 	using namespace std;
-	//av_log_set_callback (0x0);
-	av_log_set_level (AV_LOG_DEBUG|AV_LOG_VERBOSE|AV_LOG_ERROR);
+	av_log_set_callback (0x0);
 	PyImport_AppendInittab ("fobject", &f::PyInit_av);
 	Py_InitializeEx (0);
 	Py_BytesMain (argsc, args);
