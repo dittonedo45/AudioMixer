@@ -97,39 +97,11 @@ async def filter_switch():
     global do_not_just_change
     i=0
     while True:
-        await asyncio.sleep(19)
-        if (i%2)==0:
-            for j in range(100,300, 100):
-                async with do_not_just_change:
-                    main_filter=fobject.Filter(f"""[in1] lowpass,
-                        [in2]amerge, asetrate=44100*1.{j}[out]""")
-                await asyncio.sleep(0.8)
-            main_filter=fobject.Filter(f"""[in2] anullsink;
-                [in1]asetrate=44100*1.{j}[out]""")
-            await asyncio.sleep(80)
-            for j in range(100,300, -100):
-                async with do_not_just_change:
-                    main_filter=fobject.Filter(f"""[in1] lowpass,
-                        [in2]amerge, asetrate=44100*1.{j}[out]""")
-                await asyncio.sleep(0.8)
-            main_filter=fobject.Filter(f"""[in2] anullsink;
-                [in1]asetrate=44100*1.{j}[out]""")
-        else:
-            for j in range(100,300, 100):
-                async with do_not_just_change:
-                    main_filter=fobject.Filter(f"""[in2] lowpass,
-                        [in1]amerge, asetrate=44100*1.{j}[out]""")
-                await asyncio.sleep(0.8)
-            main_filter=fobject.Filter(f"""[in1] anullsink;
-                [in2]asetrate=44100*1.{j}[out]""")
-            await asyncio.sleep(80)
-            for j in range(100,300, -100):
-                async with do_not_just_change:
-                    main_filter=fobject.Filter(f"""[in2] lowpass,
-                        [in1]amerge, asetrate=44100*1.{j}[out]""")
-                await asyncio.sleep(0.8)
-            main_filter=fobject.Filter(f"""[in1] anullsink;
-                [in2]asetrate=44100*1.{j}[out]""")
+        for j in range(10,3,1):
+            main_filter=fobject.Filter(f"""[in2] lowpass,
+                [in1]amerge, asetrate=44100*1.{j}[out]""")
+            await asyncio.sleep(1.8)
+        await asyncio.sleep(29)
         i=i+1
 
 async def main (cb, *args):

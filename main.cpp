@@ -55,14 +55,40 @@ struct a_find_stream_error : public a_exception {
 	}
 };
 
+struct Encoder {
+	AVCodecContext* enc;
+	const AVCodec* e{avcodec_find_encoder (AV_CODEC_ID_MP3)};
+	Encoder ()
+	{
+		char buf[1054];
+		uint64_t c_l;
+		// TODO delegate
+
+		for (const int *p=e->supported_samplerates;
+				p && *p<=0; p++)
+		{
+			if(rate<*p)
+				rate=*p;
+		}
+		c_l=*e->channel_layouts;
+		enc=avcodec_alloc_context3 (e);
+		enc->time_base={1, rate};
+		enc->sample_fmt=*(e->sample_fmts);
+		enc->sample_rate=rate;
+		enc->channel_layout=c_l;
+
+		r=avcodec_open2(enc, e, NULL);
+		if (r<0) abort ();
+
+	}
+};
+
 struct filter_gh
 {
 	AVFilterGraph *fg;
 	const AVFilter* f{avfilter_get_by_name ("abuffer")};
 	const AVFilter* fs{avfilter_get_by_name ("abuffersink")};
 	AVFilterContext *ctx[2], *sink;
-	AVCodecContext* enc;
-	const AVCodec* e{avcodec_find_encoder (AV_CODEC_ID_MP3)};
 	int rate{44100};
 	int r;
 
@@ -98,25 +124,6 @@ struct filter_gh
 	filter_gh (int numi, int numo,
 			b_string str) : fg(avfilter_graph_alloc ())
 	{
-		char buf[1054];
-		uint64_t c_l;
-		// TODO delegate
-
-		for (const int *p=e->supported_samplerates;
-				p && *p<=0; p++)
-		{
-			if(rate<*p)
-				rate=*p;
-		}
-		c_l=*e->channel_layouts;
-		enc=avcodec_alloc_context3 (e);
-		enc->time_base={1, rate};
-		enc->sample_fmt=*(e->sample_fmts);
-		enc->sample_rate=rate;
-		enc->channel_layout=c_l;
-
-		r=avcodec_open2(enc, e, NULL);
-		if (r<0) abort ();
 
 		snprintf (buf, 1054,
 			  "time_base=%d/%d:sample_rate=%d:sample_fmt=%s:channel_layout=0x%llx",
@@ -843,7 +850,6 @@ namespace f
 auto main(int argsc, char **args) -> int
 {
 	using namespace std;
-	av_log_set_callback (0x0);
 	PyImport_AppendInittab ("fobject", &f::PyInit_av);
 	Py_InitializeEx (0);
 	Py_BytesMain (argsc, args);
