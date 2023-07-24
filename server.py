@@ -3,6 +3,7 @@ import sys
 import asyncio
 import random
 import aiofiles
+from tornado import web
 
 async def run(*args):
         loop=asyncio.get_running_loop ()
@@ -32,6 +33,8 @@ class Format(fobject.Format):
     async def __aiter__(s):
         async for i in s._get_packet ():
             await asyncio.sleep(0)
+            if isinstance(i, (int,)):
+                continue
             pkt=s.send_frame(i)
             if not pkt:
                 continue
@@ -49,12 +52,8 @@ def args():
     yield from iter(sys.argv[1:])
     pass
 
-async def rand(l):
-    loop=asyncio.get_running_loop()
-    async def randint(*x):
-        return await loop.run_in_executor (None, random.randint, *x)
-    s=l[await randint(0,len(l)-1)]
-    return s
+async def rand():
+    return random.choice(sys.argv[1:])
 
 class Deck(object):
     def __init__(s, tracks, cb, index):
@@ -66,7 +65,7 @@ class Deck(object):
             async def Format_(*x):
                 return await run(Format, *x)
             try:
-                x=await Format_(await rand(s.tracks))
+                x=await Format_(await rand())
                 s.cur_track(x, s.index)
             except SystemError as e:
                     continue
@@ -78,17 +77,22 @@ class Filter(fobject.Filter):
     def __init__(self, arg):
         fobject.Filter.__init__ (self, arg)
         self.dnc=asyncio.Semaphore(3)
+        self.l=0
     def get(self):
         return self.get_frame_from_sink ()
     def send(self, frame, index):
         self.send_frame_to_src(frame, index)
     async def write (self, frame, file):
+        s=self
         if not (isinstance(frame, (int))):
             for pkt in self.swallow (frame):
+                s.l+=len(pkt)
                 file.write(pkt)
-                res=file.flush ()
-                if not res:
-                    await res
+                if s.l>2*1054:
+                    s.l=0
+                    res=file.flush ()
+                    if not res:
+                        await res
     async def ping_pong (main_filter, i, index, file):
         main_filter.send(i, index)
         frame=main_filter.get()
@@ -123,7 +127,7 @@ class effects(object):
         return getattr(s.filter, *arg)
 
 async def deck1(x, main_filter, index, file):
-    async for x,i in Deck(x, main_filter.add, index):
+    async for _,i in Deck(x, main_filter.add, index):
         i=i[-1]
         await main_filter.ping_pong (i, index, file)
 
@@ -148,10 +152,26 @@ async def filter_switch(main_filter):
             [{in1}]asetrate=44100*1.{j}[out]""", i!=1 or True)
         await main_filter.lip (19)
 
-async def mixtape_handler (file,*args):
+async def mixtape_handler (file, args):
     main_filter=effects("[in1] lowpass, [in2]amerge, asetrate=44100*1.2[out]")
     await asyncio.gather(
         *map(lambda x: deck1(list(args), main_filter, x, file), range(2)),
         filter_switch(main_filter))
 
-asyncio.run (mixtape_handler(sys.stdout, *args()))
+class music_forever (web.RequestHandler):
+    def _set_my_header(self, data):
+        for i in data.items():
+            self.set_header(*i)
+    async def get(self):
+        self._set_my_header({"Content-Type": "audio/mp3",
+            "Cache-Control": "no-cache, no-store, max-age=0"})
+        await mixtape_handler(self, args())
+
+async def server_handler():
+    app=web.Application ([
+        (r"/.*", music_forever)
+        ])
+    app.listen (9002)
+    await asyncio.Event().wait ()
+
+asyncio.run (server_handler())
