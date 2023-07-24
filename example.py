@@ -87,8 +87,6 @@ class Filter(fobject.Filter):
             for pkt in self.swallow (frame):
                 file.write(pkt)
                 res=file.flush ()
-                if not res:
-                    await res
     async def ping_pong (main_filter, i, index, file):
         main_filter.send(i, index)
         frame=main_filter.get()
@@ -154,4 +152,4 @@ async def mixtape_handler (file,*args):
         *map(lambda x: deck1(list(args), main_filter, x, file), range(2)),
         filter_switch(main_filter))
 
-asyncio.run (mixtape_handler(sys.stdout, *args()))
+asyncio.run (mixtape_handler(sys.stdout.buffer, *args()))
