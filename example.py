@@ -3,14 +3,6 @@ import sys
 import asyncio
 import random
 import aiofiles
-import typing
-
-class Pac(typing.List):
-    def append(self, *args):
-        if (len(self)>5000):
-            del self[:90]
-        else:
-            super().append(*args)
 
 async def run(*args):
         loop=asyncio.get_running_loop ()
@@ -84,34 +76,29 @@ class Filter(fobject.Filter):
         main_filter.send(i, index)
         frame=main_filter.get()
         await main_filter.write (frame, file)
+
 class effects(object):
     def __init__(s, arg):
         s.filter=Filter(arg)
     async def change(s, arg):
         s.filter=Filter(arg)
         await asyncio.sleep (0.8)
+    async def lip(self, time):
+        await asyncio.sleep (time)
     def __getattr__(s, *arg):
         return getattr(s.filter, *arg)
 
-main_filter=effects("[in1] lowpass, [in2]amerge, asetrate=44100*1.2[out]")
-
-async def deck1(x, index):
+async def deck1(x, main_filter, index):
     std=aiofiles.stdout.buffer
     async for x,i in Deck(x):
         i=i[-1]
         await main_filter.ping_pong (i, index, std)
 
-def just(i, x):
-    assert(type(x)==int)
-    assert(x>0)
-    y=iter (i)
-    while (x:=x-1)>=0:
-        yield next(y)
-
-async def filter_switch():
+async def filter_switch(main_filter):
     i=0
     while True:
-        [in1, in2]=[*map(lambda x: "in%d"%(x,), (2,1) if ((i:=i+1)%2)==0 else (1,2))]
+        [in1, in2]=[*map(lambda x: "in%d"%(x,), (2,1)
+            if ((i:=i+1)%2)==0 else (1,2))]
         for j in range(100,300, 100):
             await main_filter.change(f"""[{in1}] lowpass,
                 [{in2}]amerge, asetrate=44100*1.{j}[out]""")
@@ -123,10 +110,13 @@ async def filter_switch():
 
         await main_filter.change(f"""[{in2}] anullsink;
             [{in1}]asetrate=44100*1.{j}[out]""")
+        await main_filter.lip (19)
 
 async def main (cb, *args):
+    main_filter=effects("[in1] lowpass, [in2]amerge, asetrate=44100*1.2[out]")
     await asyncio.gather(
-        *map(lambda x: deck1(list(args), x), range(2)), filter_switch())
+        *map(lambda x: deck1(list(args), main_filter, x), range(2)),
+        filter_switch(main_filter))
 
 
 asyncio.run (main(*args()))
