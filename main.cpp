@@ -380,17 +380,27 @@ class  Format {
 			throw ret;
 	}
 
-	long duration()
+	long long int duration()
 	{
+		if (!fmtctx->streams || fmtctx->nb_streams<stream_index || !fmtctx->streams[stream_index])
+			return 0ll;
 		return fmtctx->streams[stream_index]->duration;
+	}
+
+	AVFrame* alloc_frame ()
+	{
+		AVFrame *frame=av_frame_alloc ();
+		if (!frame)
+			abort ();
+		return frame;
 	}
 
 	AVFrame* get_frames()
 	{
 		if (rchd_end)
 			return NULL;
-		AVFrame *frame=av_frame_alloc ();
-		AVFrame *fframe=av_frame_alloc ();
+		AVFrame *frame=alloc_frame ();
+		AVFrame *fframe=alloc_frame ();
 		ret=avcodec_receive_frame (ctx.dec_ctx, frame);
 		if (ret<0)
 		{
@@ -418,57 +428,6 @@ class  Format {
 	}
 
 };
-struct gil
-{
-	PyGILState_STATE state;
-	gil()
-		: state(PyGILState_Ensure ())
-	{
-	}
-	~gil(){
-		PyGILState_Release (state);
-	}
-};
-
-namespace packet
-{
-	struct fobject {
-		PyObject_HEAD
-		AVPacket* pkt;
-	};
-	using T=PyObject*;
-	T fobject_new (PyTypeObject* t, T a, T k)
-	{
-		return t->tp_alloc(t, 0);
-	}
-	int fobject_init (T t, T a, T k)
-	{
-		PyGILState_STATE state=PyGILState_Ensure ();
-		fobject* fb=(fobject*)t;
-		gil g;
-		fb->pkt=av_packet_alloc ();
-		if (!fb->pkt )
-		{
-			PyErr_NoMemory ();
-			return 1;
-		}
-		return 0;
-	}
-	void fobject_dealloc (T o)
-	{
-		fobject* f=(fobject*) o;
-		av_packet_free (&f->pkt);
-	}
-	static PyTypeObject fobject_type ={
-		PyVarObject_HEAD_INIT (NULL, 0)
-		.tp_name="AVPacket",
-		.tp_init=fobject_init,
-		.tp_dealloc=fobject_dealloc,
-		.tp_new=fobject_new,
-		.tp_basicsize=sizeof(fobject),
-		.tp_flags=Py_TPFLAGS_DEFAULT|Py_TPFLAGS_BASETYPE
-	};
-}
 
 namespace filter {
 	struct fil_object {
@@ -492,7 +451,6 @@ namespace filter {
 					&num_of_outputs
 					))
 			return 1;
-		gil g;
 		fb->fg=new filter_gh (num_of_inputs,
 				num_of_outputs,
 				path);
@@ -508,19 +466,13 @@ namespace filter {
 		fil_object* f=(fil_object*) s;
 		T arg;
 		int index;
+		int r=0;
 
 		if (!PyArg_ParseTuple (a, "Oi", &arg, &index))
 			return NULL;
-		AVFrame *frame=(AVFrame*)
-			PyCapsule_GetPointer (arg, "_frame");
-		int r=0;
-		{
-			gil g;
-			r=
-			av_buffersrc_add_frame(
-				f->fg->get_src (index),
-				frame);
-		}
+		AVFrame *frame=(AVFrame*)PyCapsule_GetPointer (arg, "_frame");
+		r=av_buffersrc_add_frame(f->fg->get_src (index),
+			frame);
 		return PyLong_FromLong (r);
 	}
 	T get_frame_from_sink (T s, T a)
@@ -529,23 +481,19 @@ namespace filter {
 
 		AVFrame* frame=av_frame_alloc ();
 		int r;
-		{
-			gil g;
-			r = av_buffersink_get_frame_flags (
-					f->fg->get_sink (),
-					      frame, 4);
-		}
+		r = av_buffersink_get_frame_flags (
+				f->fg->get_sink (),
+				      frame, 4);
 		if (r<0)
 			return PyLong_FromLong (r);
-		return PyCapsule_New(frame, "_frame",
-				+[](T obj)
-			{
-				AVFrame* p=
-				(AVFrame*)
-				PyCapsule_GetPointer (obj, "_frame");
-				gil g;
-				av_frame_free(&p);
-			});
+	return PyCapsule_New(frame, "_frame",
+			+[](T obj)
+		{
+			AVFrame* p=
+			(AVFrame*)
+			PyCapsule_GetPointer (obj, "_frame");
+			av_frame_free(&p);
+		});
 	}
 	T swallow (T s, T a)
 	{
@@ -558,32 +506,22 @@ namespace filter {
 			PyCapsule_GetPointer (arg, "_frame");
 
 		int r;
-		{
-		gil g;
 		r=avcodec_send_frame (f->fg->enc, frame);
-		}
 		if (r<0)
 			return PyLong_FromLong(r);
-		AVPacket* pkt;
-		{
-		gil g;
-		pkt=av_packet_alloc ();
-		}
+		AVPacket* pkt=av_packet_alloc ();
 		struct u {
 			AVPacket* pkt;
 			u(AVPacket* z):pkt(z){}
 			~u(){
-			gil g;
 			av_packet_free (&pkt);
 		}} u(pkt);
 
 		T res=PyList_New (0);
-		do{
-			{
-				gil g;
+		do
+		{
 			if (avcodec_receive_packet (f->fg->enc,
 					pkt)) break;
-			}
 			PyList_Append(res,
 				PyBytes_FromStringAndSize
 				((const char*)pkt->data,
@@ -620,6 +558,7 @@ namespace f
 	struct fobject {
 		PyObject_HEAD
 		Format* fmtctx;
+		long long int duration;
 	};
 
 	using T=PyObject*;
@@ -635,17 +574,8 @@ namespace f
 		if (!PyArg_ParseTuple (a, "s", &path))
 			return 1;
 		try{
-			struct gil
-			{
-				PyGILState_STATE state;
-				gil(){
-					state=PyGILState_Ensure ();
-				}
-				~gil(){
-					PyGILState_Release (state);
-				}
-			} g;
 			fb->fmtctx=new Format(path);
+			fb->duration++;
 		}catch(a_exception& exp)
 		{
 			PyErr_Format (PyExc_RuntimeError,
@@ -669,6 +599,7 @@ namespace f
 		try {
 			fobject* f=(fobject*) s;
 			AVPacket*& pkt=f->fmtctx->get_packet ();
+			f->duration+=pkt->duration;
 			AVPacket* res=av_packet_clone(pkt);
 			return PyCapsule_New(res, "_packet",
 					+[](T obj)
@@ -714,7 +645,6 @@ namespace f
 					AVFrame* p=
 					(AVFrame*)
 					PyCapsule_GetPointer (obj, "_frame");
-					gil g;
 					av_frame_free(&p);
 				});
 		}catch(...)
@@ -731,7 +661,6 @@ namespace f
 			return NULL;
 		try {
 			fobject* f=(fobject*) s;
-					gil g;
 			f->fmtctx->seek (arg);
 		}catch(...)
 		{
@@ -743,16 +672,13 @@ namespace f
 	}
 	T get_duration (T s, T a)
 	{
-		try {
-			fobject* f=(fobject*) s;
-			return PyLong_FromLong(f->fmtctx->duration ());
-		}catch(...)
-		{
-			PyErr_Format (PyExc_Exception,
-					"Can not seek any file so easily.");
-			return NULL;
-		}
-		Py_RETURN_NONE;
+		fobject* f=(fobject*) s;
+		return PyLong_FromLongLong (f->duration);
+	}
+	T get_total_duration (T s, T a)
+	{
+		fobject* f=(fobject*) s;
+		return PyLong_FromLongLong (f->fmtctx->duration());
 	}
 	static PyMethodDef methods[]={
 		{"get_packet", get_packet, METH_VARARGS,
@@ -764,6 +690,9 @@ namespace f
 			"Seek AVFORMATCONTEXT"},
 		{"duration",
 			get_duration, METH_VARARGS,
+			"get_duration AVFORMATCONTEXT"},
+		{"max_duration",
+			get_total_duration, METH_VARARGS,
 			"get_duration AVFORMATCONTEXT"},
 		{NULL, NULL, 0, NULL}
 	};
@@ -808,7 +737,6 @@ namespace f
 		PyObject *ov=PyModule_Create (&avv);
 
 		PyType_Ready (&fobject_type);
-		PyType_Ready (&packet::fobject_type);
 		PyType_Ready (&filter::fobject_type);
 
 		if (!Format_EOF)
@@ -825,10 +753,6 @@ namespace f
 		Py_XINCREF(&fobject_type);
 		PyModule_AddObject (ov, "Format",
 				(t)&fobject_type
-		);
-		Py_XINCREF(&packet::fobject_type);
-		PyModule_AddObject (ov, "Packet",
-				(T)&packet::fobject_type
 		);
 		Py_XINCREF(&filter::fobject_type);
 		PyModule_AddObject (ov, "Filter",
