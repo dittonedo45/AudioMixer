@@ -492,7 +492,6 @@ namespace filter {
 					&num_of_outputs
 					))
 			return 1;
-//"[in1] lowpass, [in2]amerge, asetrate=44100*1.2[out]"
 		gil g;
 		fb->fg=new filter_gh (num_of_inputs,
 				num_of_outputs,
