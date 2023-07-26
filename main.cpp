@@ -382,7 +382,9 @@ class  Format {
 
 	long long int duration()
 	{
-		if (!fmtctx->streams || fmtctx->nb_streams<stream_index || !fmtctx->streams[stream_index])
+		if (!fmtctx->streams ||
+				fmtctx->nb_streams<stream_index ||
+				!fmtctx->streams[stream_index])
 			return 0ll;
 		return fmtctx->streams[stream_index]->duration;
 	}
@@ -464,15 +466,25 @@ namespace filter {
 	T send_frame_to_src (T s, T a)
 	{
 		fil_object* f=(fil_object*) s;
-		T arg;
-		int index;
+		T arg=0;
+		int index=-1;
 		int r=0;
 
-		if (!PyArg_ParseTuple (a, "Oi", &arg, &index))
+		if (!PyArg_ParseTuple (a, "i|O", &index, &arg))
 			return NULL;
-		AVFrame *frame=(AVFrame*)PyCapsule_GetPointer (arg, "_frame");
-		r=av_buffersrc_add_frame(f->fg->get_src (index),
-			frame);
+		if (arg)
+		{
+			AVFrame *frame=(AVFrame*)PyCapsule_GetPointer (arg, "_frame");
+			r=av_buffersrc_add_frame_flags
+				(f->fg->get_src (index),
+				frame,
+				AV_BUFFERSRC_FLAG_PUSH);
+		}else{
+			r=av_buffersrc_add_frame
+				(f->fg->get_src (index),
+				 NULL);
+
+		}
 		return PyLong_FromLong (r);
 	}
 	T get_frame_from_sink (T s, T a)
@@ -483,7 +495,7 @@ namespace filter {
 		int r;
 		r = av_buffersink_get_frame_flags (
 				f->fg->get_sink (),
-				      frame, 4);
+				      frame, 2);
 		if (r<0)
 			return PyLong_FromLong (r);
 	return PyCapsule_New(frame, "_frame",
@@ -558,7 +570,6 @@ namespace f
 	struct fobject {
 		PyObject_HEAD
 		Format* fmtctx;
-		long long int duration;
 	};
 
 	using T=PyObject*;
@@ -575,7 +586,9 @@ namespace f
 			return 1;
 		try{
 			fb->fmtctx=new Format(path);
-			fb->duration++;
+			PyObject_SetAttrString(t,
+				"_duration",
+				PyLong_FromLong (0));
 		}catch(a_exception& exp)
 		{
 			PyErr_Format (PyExc_RuntimeError,
@@ -599,7 +612,15 @@ namespace f
 		try {
 			fobject* f=(fobject*) s;
 			AVPacket*& pkt=f->fmtctx->get_packet ();
-			f->duration+=pkt->duration;
+
+			/*
+			PyObject_SetAttrString(s, "_duration",
+					PyObject_CallMethod(PyObject_GetAttrString(s, "_duration"),
+					"__radd__", "(O)", PyLong_FromLongLong (pkt->duration)));
+					*/
+					PyObject_CallMethod(s,
+					"duration_cb", "(O)", PyLong_FromLongLong (pkt->duration));
+
 			AVPacket* res=av_packet_clone(pkt);
 			return PyCapsule_New(res, "_packet",
 					+[](T obj)
@@ -673,7 +694,8 @@ namespace f
 	T get_duration (T s, T a)
 	{
 		fobject* f=(fobject*) s;
-		return PyLong_FromLongLong (f->duration);
+		return PyObject_GetAttrString(s,
+			"_duration");
 	}
 	T get_total_duration (T s, T a)
 	{

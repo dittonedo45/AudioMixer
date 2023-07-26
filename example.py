@@ -13,7 +13,15 @@ class Format(fobject.Format):
         s.args=a
         s.percentage=0
         (fobject.Format).__init__(s, *a, *kw)
-        pass
+        s._stop=False
+        s._max_d=s.max_duration()
+        s._duration=0
+
+    def duration_cb(s, arg):
+        s._duration+=arg
+    def len(s):
+        return s.max_duration()
+
     async def _get_packet(s):
         async def get_packet():
             return await run(s.get_packet)
@@ -22,25 +30,35 @@ class Format(fobject.Format):
                 yield await get_packet ()
             except fobject.EOF:
                 return
+    def stop(s, arg=False):
+        s._stop=arg
     def calculate(self):
-        d, m=self.duration (), self.max_duration ()
-        self.percentage=100
+        s=self
+        if 0==s._max_d:
+            s._max_d=s.len ()
+        d, m=self.duration (), self._max_d
         if d and m:
             self.percentage=(d/m)*100
+        else:
+            self.percentage=100
+            print(d, m, file=sys.stderr)
         return self.percentage
 
     async def __aiter__(s):
-        async for i in s._get_packet ():
-            await asyncio.sleep(0)
-            pkt=s.send_frame(i)
-            if not pkt:
-                continue
-            yield s, pkt
-            try:
-                while True:
-                    yield s, s.send_frame(None)
-            except EOFError:
-                pass
+        try:
+            async for i in s._get_packet ():
+                await asyncio.sleep(0)
+                pkt=s.send_frame(i)
+                if not pkt:
+                    continue
+                yield s, pkt
+                try:
+                    while True:
+                        yield s, s.send_frame(None)
+                except EOFError:
+                    pass
+        except EOFError:
+            pass
     def __repr__(s):
         return "AVFormat({0!r})".format(s.args[0])
     pass
@@ -61,6 +79,9 @@ class Deck(object):
         s.tracks=tracks
         s.cur_track=cb
         s.index=index
+        s._stop=False
+    def stop(s, arg=False):
+        s._stop=arg
     async def __aiter__(s):
         while True:
             async def Format_(*x):
@@ -81,12 +102,16 @@ class Filter(fobject.Filter):
     def get(self):
         return self.get_frame_from_sink ()
     def send(self, frame, index):
-        self.send_frame_to_src(frame, index)
+        self.send_frame_to_src(index, frame)
+    def flush(self, index):
+        self.send_frame_to_src(index)
     async def write (self, frame, file):
         if not (isinstance(frame, (int))):
-            for pkt in self.swallow (frame):
-                file.write(pkt)
-                res=file.flush ()
+            res=self.swallow (frame)
+            if not isinstance(res, int):
+                for pkt in res:
+                    file.write(pkt)
+                    res=file.flush ()
     async def ping_pong (main_filter, i, index, file):
         main_filter.send(i, index)
         frame=main_filter.get()
@@ -96,9 +121,22 @@ class effects(object):
     def __init__(s, arg):
         s.filter=Filter(arg)
         s.stuff=[None, None]
+        s._stops=[None, None]
+    def stop (s, arg):
+        if arg==None:
+            for i in filter(lambda x: not x is None, s._stops):
+                i.stop (True)
+            s._stops=[None, None]
+        else:
+            x=int(arg[2:])-1
+            s._stops[x]=s.stuff[x]
+            x=s._stops[x]
+            if not x is None:
+                x.stop ()
     def add(s, arg, index):
         s.stuff[index]=arg
     async def change(s, arg, ch=False):
+        s.stop (None)
         if not ch:
             s.filter=Filter(arg)
         else:
@@ -121,9 +159,13 @@ class effects(object):
         return getattr(s.filter, *arg)
 
 async def deck1(x, main_filter, index, file):
+    lreserve=[]
     async for x,i in Deck(x, main_filter.add, index):
         i=i[-1]
-        await main_filter.ping_pong (i, index, file)
+        lreserve.append(i)
+        if len(lreserve)<90:
+            continue
+        await main_filter.ping_pong (lreserve.pop (), index, file)
 
 async def filter_switch(main_filter):
     i=0
@@ -132,11 +174,12 @@ async def filter_switch(main_filter):
             if ((i:=i+1)%2)==0 else (1,2))]
 
         for j in range(100,300, 100):
-            await main_filter.change(f"""[{in1}] lowpass,
+            await main_filter.change(f"""[{in1}]lowpass,
                 [{in2}]amerge, asetrate=44100*1.{j}[out]""", i!=1 or True)
 
         await main_filter.change(f"""[{in2}] anullsink;
             [{in1}]asetrate=44100*1.{j}[out]""", i!=1 or True)
+        main_filter.stop (in2)
 
         for j in range(100,300, -100):
             await main_filter.change(f"""[{in1}] lowpass,
@@ -144,10 +187,11 @@ async def filter_switch(main_filter):
 
         await main_filter.change(f"""[{in2}] anullsink;
             [{in1}]asetrate=44100*1.{j}[out]""", i!=1 or True)
+        main_filter.stop (in2)
         await main_filter.lip (19)
 
 async def mixtape_handler (file,*args):
-    main_filter=effects("[in1] lowpass, [in2]amerge, asetrate=44100*1.2[out]")
+    main_filter=effects("[in1] lowpass, [in2]amerge, asetrate=44100*1.2,aformat=channel_layouts=4.0[out]")
     await asyncio.gather(
         *map(lambda x: deck1(list(args), main_filter, x, file), range(2)),
         filter_switch(main_filter))
