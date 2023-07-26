@@ -533,7 +533,7 @@ namespace filter {
 		do
 		{
 			if (avcodec_receive_packet (f->fg->enc,
-					pkt)) break;
+					pkt)<0) break;
 			PyList_Append(res,
 				PyBytes_FromStringAndSize
 				((const char*)pkt->data,
