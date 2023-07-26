@@ -64,21 +64,19 @@ class Deck(object):
         while True:
             try:
                 x=Format(rand(s.tracks))
+                lis=[*map(lambda x: os.path.join("effects", x),
+                    os.listdir("effects"))]
+                effs=[Format(erand(lis))
+                    for _ in range(erand([*range(1, 3)]))]
                 s.cur_track(x, s.index)
             except SystemError as e:
                     continue
             else:
-                lis=[*map(lambda x: os.path.join("effects", x),
-                    os.listdir("effects"))]
-                y=Format (ef:=erand(lis))
                 async def tg(*s):
                     for i in s:
                         async for j in i:
                             yield j
-                async for i in tg(y,*[Format(erand(lis))
-                    for _ in range(erand([*range(1, 3)]))],x):
-                    print(i, file=sys.stderr)
-                    continue
+                async for i in tg(x,*effs):
                     yield x, i
 
 class Filter(fobject.Filter):

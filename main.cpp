@@ -656,7 +656,10 @@ namespace f
 			case STAGE_G_IN:
 			try{
 				AVPacket* pkt=fb->fmtctx->get_packet ();
-				if (pkt)
+				if (!pkt)
+				{
+					throw 0;
+				}
 				PyObject_CallMethod(s,
 				"duration_cb", "(O)",
 				PyLong_FromLongLong (pkt->duration));
@@ -698,7 +701,6 @@ namespace f
 			break;
 			case STAGE_G_END:
 			default:
-			Py_XDECREF (PyExc_StopIteration);
 			PyErr_Format (PyExc_StopIteration,
 				"Failed to allocate.");
 			return NULL;
