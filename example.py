@@ -36,9 +36,7 @@ class Format(fobject.Format):
         return self.percentage
 
     async def __aiter__(s):
-        for i in s:
-            if i==None:
-                continue
+        for i in filter(lambda x: x, s):
             yield s, i
             await asyncio.sleep (0)
     def __repr__(s):
@@ -68,33 +66,29 @@ class Deck(object):
             except SystemError as e:
                     continue
             else:
-                lis=[*map(lambda x: os.path.join("effects", x),
-                    os.listdir("effects"))]
-                y=Format (ef:=erand(lis))
-                async def tg(*s):
-                    for i in s:
-                        async for j in i:
-                            yield j
-                async for i in tg(x):
+                async for i in x:
                     yield x, i
 
 class Filter(fobject.Filter):
     def __init__(self, arg):
         fobject.Filter.__init__ (self, arg)
-        self.dnc=asyncio.Semaphore(3)
-    def get(self):
-        return self.get_frame_from_sink ()
     def send(self, frame, index):
-        self.send_frame_to_src(index, frame)
+        print(self.send_frame_to_src(index, frame),
+                file=sys.stderr)
     def flush(self, index):
         self.send_frame_to_src(index)
-    async def write (selffile):
-        for pkt in res:
-            file.write(pkt)
-            file.flush ()
+    async def write (self, file):
+        for pkt in self:
+            print(pkt, file=sys.stderr)
+            if pkt==False:
+                continue
     async def ping_pong (main_filter, i, index, file):
-        main_filter.send(i, index)
-        await main_filter.write (file)
+        while True:
+            res=main_filter.send(i, index)
+            if res==False:
+                await asyncio.sleep(0)
+                continue
+            await main_filter.write (file)
 
 class effects(object):
     def __init__(s, arg):

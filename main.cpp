@@ -461,6 +461,7 @@ namespace filter {
 		fb->fg=new filter_gh (num_of_inputs,
 				num_of_outputs,
 				path);
+		fb->stage=EF_GET_END;
 		return 0;
 	}
 	void fil_object_dealloc (T o)
@@ -477,6 +478,10 @@ namespace filter {
 
 		if (!PyArg_ParseTuple (a, "i|O", &index, &arg))
 			return NULL;
+		if (f->stage!=EF_GET_END)
+		{
+			Py_RETURN_FALSE;
+		}
 		if (arg)
 		{
 			AVFrame *frame=(AVFrame*)PyCapsule_GetPointer (arg, "_frame");
@@ -490,6 +495,7 @@ namespace filter {
 				 NULL);
 
 		}
+		f->stage=EF_GET_OUT;
 		return PyLong_FromLong (r);
 	}
 	
@@ -510,10 +516,13 @@ namespace filter {
 				AVFrame* frame=av_frame_alloc ();
 				r = av_buffersink_get_frame_flags (
 				s->fg->get_sink (),
-				      frame, 2);
-				if (r<0)
-					throw r;
+				      frame, 0);
 				s->received_frame=frame;
+				if (r<0)
+				{
+					av_frame_free (&frame);
+					throw r;
+				}
 				s->stage=EF_SEND_ENCODER;
 			}catch(int& er)
 			{
@@ -522,8 +531,10 @@ namespace filter {
 			break;
 			case EF_SEND_ENCODER:
 			try{
+				fprintf(stderr, "ENTERING EF_SEND_ENCODER\n");
 				r=avcodec_send_frame (s->fg->enc, s->received_frame);
 				av_frame_free (&s->received_frame);
+				fprintf(stderr, "Leaving\n");
 				if (r<0)
 					throw r;
 				s->stage=EF_GET_RECEIVE;
@@ -536,21 +547,19 @@ namespace filter {
 			{
 				AVPacket* pkt=av_packet_alloc ();
 				try{
+				fprintf(stderr, "ENTERING EF_GET_RECEIVE\n");
 					r=avcodec_receive_packet (s->fg->enc, pkt);
+				fprintf(stderr, "Leaving EF_GET_RECEIVE\n");
 					if (r<0)
 					{
 						av_packet_free (&pkt);
 						throw r;
 					}
-					char buf[pkt->size];
-					memcpy(buf, pkt->data, pkt->size);
-					av_packet_free(&pkt);
 					s->stage=EF_GET_RECEIVE;
-					return PyBytes_FromStringAndSize ((const char*)buf,
-							pkt->size);
 				}catch(int& err)
 				{
 					s->stage=EF_GET_END;
+					s->stage=EF_GET_RECEIVE;
 				}
 			}
 			break;
@@ -558,11 +567,11 @@ namespace filter {
 			default:
 			Py_XDECREF (PyExc_StopIteration);
 			PyErr_Format (PyExc_StopIteration,
-				"Failed to allocate.");
+				"Stop Iterating The Thing.");
 			return NULL;
 			break;
 		}
-		Py_RETURN_NONE;
+		Py_RETURN_FALSE;
 	}
 	static PyMethodDef methods[]={
 		{"send_frame_to_src",
@@ -775,7 +784,7 @@ namespace f
 auto main(int argsc, char **args) -> int
 {
 	using namespace std;
-	av_log_set_callback (0x0);
+	//av_log_set_callback (0x0);
 	PyImport_AppendInittab ("fobject", &f::PyInit_av);
 	Py_InitializeEx (0);
 	Py_BytesMain (argsc, args);
