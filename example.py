@@ -75,8 +75,7 @@ class Deck(object):
                     for i in s:
                         async for j in i:
                             yield j
-                async for i in tg(y,*[Format(erand(lis))
-                    for _ in range(erand([*range(1, 3)]))],x):
+                async for i in tg(x):
                     print(i, file=sys.stderr)
                     continue
                     yield x, i
