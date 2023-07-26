@@ -166,6 +166,9 @@ async def deck1(x, main_filter, index, file):
         if len(lreserve)<90:
             continue
         await main_filter.ping_pong (lreserve.pop (), index, file)
+    for _ in iter(lambda: len(lreserve), 0):
+        await main_filter.ping_pong (lreserve.pop (), index, file)
+        await asyncio.sleep(0)
 
 async def filter_switch(main_filter):
     i=0
