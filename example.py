@@ -41,7 +41,6 @@ class Format(fobject.Format):
             self.percentage=(d/m)*100
         else:
             self.percentage=100
-            print(d, m, file=sys.stderr)
         return self.percentage
 
     async def __aiter__(s):
@@ -99,7 +98,6 @@ class Deck(object):
                 lis=[*map(lambda x: os.path.join("effects", x),
                     os.listdir("effects"))]
                 y=await Format_ (ef:=rand(lis))
-                print(ef, file=sys.stderr)
                 async def tg(*s):
                     for i in s:
                         async for j in i:
