@@ -286,7 +286,7 @@ class  Format {
 		// TODO delegate the work of this part.
 		try{
 
-			ctx.stream_index=ret=av_find_best_stream (fmtctx,
+			stream_index=ctx.stream_index=ret=av_find_best_stream (fmtctx,
 					AVMEDIA_TYPE_AUDIO,-1,-1,&ctx.d,NULL);
 			if (ret<0)
 			{

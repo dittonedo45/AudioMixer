@@ -37,6 +37,7 @@ class Format(fobject.Format):
 
     async def __aiter__(s):
         for i in filter(lambda x: x, s):
+            print(s.calculate (), file=sys.stderr)
             yield s, i
             await asyncio.sleep (0)
     def __repr__(s):
@@ -114,6 +115,7 @@ class effects(object):
             if not all(s.stuff):
                 return
             [first,second]=[*map (lambda x: getattr(x, "calculate")(), s.stuff)]
+            return
             if (first<10):
                 return
             if (second>80):
