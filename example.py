@@ -1,5 +1,5 @@
 import fobject
-import sys
+import sys, os
 import asyncio
 import random
 import aiofiles
@@ -47,7 +47,6 @@ class Format(fobject.Format):
     async def __aiter__(s):
         try:
             async for i in s._get_packet ():
-                await asyncio.sleep(0)
                 pkt=s.send_frame(i)
                 if not pkt:
                     continue
@@ -57,6 +56,16 @@ class Format(fobject.Format):
                         yield s, s.send_frame(None)
                 except EOFError:
                     pass
+            try:
+                for i in s.get_packet (False):
+                    pkt=s.send_frame(i)
+                    if not pkt:
+                        continue
+                    yield s, pkt
+                    while True:
+                        yield s, s.send_frame(None)
+            except fobject.EOF:
+                pass
         except EOFError:
             pass
     def __repr__(s):
@@ -64,15 +73,10 @@ class Format(fobject.Format):
     pass
 
 def args():
-    yield from iter(sys.argv[1:])
+    yield from iter(sys.argv[2:])
     pass
 
-async def rand(l):
-    loop=asyncio.get_running_loop()
-    async def randint(*x):
-        return await loop.run_in_executor (None, random.randint, *x)
-    s=l[await randint(0,len(l)-1)]
-    return s
+rand=random.Random(int(sys.argv[1],36)).choice
 
 class Deck(object):
     def __init__(s, tracks, cb, index):
@@ -87,12 +91,21 @@ class Deck(object):
             async def Format_(*x):
                 return await run(Format, *x)
             try:
-                x=await Format_(await rand(s.tracks))
+                x=await Format_(rand(s.tracks))
                 s.cur_track(x, s.index)
             except SystemError as e:
                     continue
             else:
-                async for i in x:
+                lis=[*map(lambda x: os.path.join("effects", x),
+                    os.listdir("effects"))]
+                y=await Format_ (ef:=rand(lis))
+                print(ef, file=sys.stderr)
+                async def tg(*s):
+                    for i in s:
+                        async for j in i:
+                            yield j
+                async for i in tg(y,*[await Format_(rand(lis))
+                    for _ in range(rand([*range(2, 8)]))],x):
                     yield x, i
 
 class Filter(fobject.Filter):
@@ -143,9 +156,9 @@ class effects(object):
             if not all(s.stuff):
                 return
             [first,second]=[*map (lambda x: getattr(x, "calculate")(), s.stuff)]
-            if (first<20):
+            if (first<10):
                 return
-            if (second>60):
+            if (second>80):
                 return
             s.filter=Filter(arg)
         await asyncio.sleep (0.8)

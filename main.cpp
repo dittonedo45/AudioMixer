@@ -648,9 +648,15 @@ namespace f
 
 			if (arg!=Py_None)
 			{
+				if (arg==Py_False)
+				{
+					f->fmtctx->set_frame (NULL);
+				}else
 				try{
 					Py_XINCREF (arg);
-					AVPacket* pkt=(AVPacket*)PyCapsule_GetPointer(arg, "_packet");
+					AVPacket* pkt=(AVPacket*)
+					PyCapsule_GetPointer(arg, "_packet");
+
 					f->fmtctx->set_frame (pkt);
 				} catch (int& ret)
 				{
