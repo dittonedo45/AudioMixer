@@ -76,8 +76,6 @@ class Deck(object):
                         async for j in i:
                             yield j
                 async for i in tg(x):
-                    print(i, file=sys.stderr)
-                    continue
                     yield x, i
 
 class Filter(fobject.Filter):
@@ -90,17 +88,13 @@ class Filter(fobject.Filter):
         self.send_frame_to_src(index, frame)
     def flush(self, index):
         self.send_frame_to_src(index)
-    async def write (self, frame, file):
-        if not (isinstance(frame, (int))):
-            res=self.swallow (frame)
-            if not isinstance(res, int):
-                for pkt in res:
-                    file.write(pkt)
-                    res=file.flush ()
+    async def write (selffile):
+        for pkt in res:
+            file.write(pkt)
+            file.flush ()
     async def ping_pong (main_filter, i, index, file):
         main_filter.send(i, index)
-        frame=main_filter.get()
-        await main_filter.write (frame, file)
+        await main_filter.write (file)
 
 class effects(object):
     def __init__(s, arg):

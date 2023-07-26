@@ -429,9 +429,17 @@ class  Format {
 };
 
 namespace filter {
+	enum fstage_t {
+		EF_GET_OUT=1,
+		EF_GET_END,
+		EF_SEND_ENCODER,
+		EF_GET_RECEIVE
+	};
 	struct fil_object {
 		PyObject_HEAD
 		filter_gh *fg;
+		fstage_t stage;
+		AVFrame* received_frame;
 	};
 	using T=PyObject*;
 	T fil_object_new (PyTypeObject* t, T a, T k)
@@ -484,70 +492,82 @@ namespace filter {
 		}
 		return PyLong_FromLong (r);
 	}
-	T get_frame_from_sink (T s, T a)
+	
+	T filter_iter (T s)
 	{
-		fil_object* f=(fil_object*) s;
-
-		AVFrame* frame=av_frame_alloc ();
-		int r;
-		r = av_buffersink_get_frame_flags (
-				f->fg->get_sink (),
-				      frame, 2);
-		if (r<0)
-			return PyLong_FromLong (r);
-	return PyCapsule_New(frame, "_frame",
-			+[](T obj)
-		{
-			AVFrame* p=
-			(AVFrame*)
-			PyCapsule_GetPointer (obj, "_frame");
-			av_frame_free(&p);
-		});
+		Py_XINCREF (s);
+		return s;
 	}
-	T swallow (T s, T a)
+	T filter_iternext (T f)
 	{
-		fil_object* f=(fil_object*) s;
-		T arg;
-
-		if (!PyArg_ParseTuple (a, "O", &arg))
-			return NULL;
-		AVFrame *frame=(AVFrame*)
-			PyCapsule_GetPointer (arg, "_frame");
-
+		fil_object *s=(fil_object*)f;
 		int r;
-		r=avcodec_send_frame (f->fg->enc, frame);
-		if (r<0)
-			return PyLong_FromLong(r);
-		AVPacket* pkt=av_packet_alloc ();
-		struct u {
-			AVPacket* pkt;
-			u(AVPacket* z):pkt(z){}
-			~u(){
-			av_packet_free (&pkt);
-		}} u(pkt);
 
-		T res=PyList_New (0);
-		do
+		switch (s->stage)
 		{
-			if (avcodec_receive_packet (f->fg->enc,
-					pkt)) break;
-			PyList_Append(res,
-				PyBytes_FromStringAndSize
-				((const char*)pkt->data,
-				 pkt->size));
-		} while (1);
-		return res;
+			case EF_GET_OUT:
+			try{
+				AVFrame* frame=av_frame_alloc ();
+				r = av_buffersink_get_frame_flags (
+				s->fg->get_sink (),
+				      frame, 2);
+				if (r<0)
+					throw r;
+				s->received_frame=frame;
+				s->stage=EF_SEND_ENCODER;
+			}catch(int& er)
+			{
+				s->stage=EF_GET_END;
+			}
+			break;
+			case EF_SEND_ENCODER:
+			try{
+				r=avcodec_send_frame (s->fg->enc, s->received_frame);
+				av_frame_free (&s->received_frame);
+				if (r<0)
+					throw r;
+				s->stage=EF_GET_RECEIVE;
+			}catch(int& err)
+			{
+				s->stage=EF_GET_END;
+			}
+			break;
+			case EF_GET_RECEIVE:
+			{
+				AVPacket* pkt=av_packet_alloc ();
+				try{
+					r=avcodec_receive_packet (s->fg->enc, pkt);
+					if (r<0)
+					{
+						av_packet_free (&pkt);
+						throw r;
+					}
+					char buf[pkt->size];
+					memcpy(buf, pkt->data, pkt->size);
+					av_packet_free(&pkt);
+					s->stage=EF_GET_RECEIVE;
+					return PyBytes_FromStringAndSize ((const char*)buf,
+							pkt->size);
+				}catch(int& err)
+				{
+					s->stage=EF_GET_END;
+				}
+			}
+			break;
+			case EF_GET_END:
+			default:
+			Py_XDECREF (PyExc_StopIteration);
+			PyErr_Format (PyExc_StopIteration,
+				"Failed to allocate.");
+			return NULL;
+			break;
+		}
+		Py_RETURN_NONE;
 	}
 	static PyMethodDef methods[]={
 		{"send_frame_to_src",
 			send_frame_to_src, METH_VARARGS,
 			"send_frame_to_src"},
-		{"get_frame_from_sink",
-			get_frame_from_sink, METH_VARARGS,
-			"Get_frame"},
-		{"swallow",
-			swallow, METH_VARARGS,
-			"swallow!!"},
 		{NULL, NULL, 0, NULL}
 	};
 	static PyTypeObject fobject_type ={
@@ -556,6 +576,8 @@ namespace filter {
 		.tp_init=fil_object_init,
 		.tp_dealloc=fil_object_dealloc,
 		.tp_new=fil_object_new,
+		.tp_iter=filter_iter,
+		.tp_iternext=filter_iternext,
 		.tp_methods=methods,
 		.tp_basicsize=sizeof(fil_object),
 		.tp_flags=Py_TPFLAGS_DEFAULT|Py_TPFLAGS_BASETYPE
@@ -632,17 +654,6 @@ namespace f
 			"get_duration AVFORMATCONTEXT"},
 		{NULL, NULL, 0, NULL}
 	};
-	T get_frame (T s, T a)
-	{
-		PyObject* arg;
-		int index;
-		int r;
-		if (!PyArg_ParseTuple (a, "Oi", &arg, &index))
-			return NULL;
-		AVFrame* frame=(AVFrame*)PyCapsule_GetPointer (arg,
-				"_frame");
-		Py_RETURN_NONE;
-	}
 	T format_iter (T s)
 	{
 		Py_XINCREF (s);
@@ -723,9 +734,6 @@ namespace f
 	PyInit_av ()
 	{
 		static PyMethodDef methods[]={
-			{"get_frame",
-			get_frame, METH_VARARGS,
-			"Get the AVFrame*;"},
 			{NULL, NULL, 0, NULL}
 		};
 		static struct PyModuleDef avv={
