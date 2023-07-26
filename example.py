@@ -77,6 +77,7 @@ def args():
     pass
 
 rand=random.Random(int(sys.argv[1],36)).choice
+erand=random.Random(int(sys.argv[1],36)**2).choice
 
 class Deck(object):
     def __init__(s, tracks, cb, index):
@@ -98,14 +99,14 @@ class Deck(object):
             else:
                 lis=[*map(lambda x: os.path.join("effects", x),
                     os.listdir("effects"))]
-                y=await Format_ (ef:=rand(lis))
+                y=await Format_ (ef:=erand(lis))
                 print(ef, file=sys.stderr)
                 async def tg(*s):
                     for i in s:
                         async for j in i:
                             yield j
-                async for i in tg(y,*[await Format_(rand(lis))
-                    for _ in range(rand([*range(2, 8)]))],x):
+                async for i in tg(y,*[await Format_(erand(lis))
+                    for _ in range(erand([*range(1, 3)]))],x):
                     yield x, i
 
 class Filter(fobject.Filter):
@@ -161,7 +162,7 @@ class effects(object):
             if (second>80):
                 return
             s.filter=Filter(arg)
-        await asyncio.sleep (0.8)
+        await asyncio.sleep (1.8)
     async def lip(self, time):
         await asyncio.sleep (time)
     async def ping_pong (s, *arg):
@@ -204,7 +205,7 @@ async def filter_switch(main_filter):
         await main_filter.change(f"""[{in2}] anullsink;
             [{in1}]asetrate=44100*1.{j}[out]""", i!=1 or True)
         main_filter.stop (in2)
-        await main_filter.lip (19)
+        await main_filter.lip (9)
 
 async def mixtape_handler (file,*args):
     main_filter=effects("[in1] lowpass, [in2]amerge, asetrate=44100*1.2,aformat=channel_layouts=4.0[out]")

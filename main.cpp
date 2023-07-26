@@ -399,17 +399,14 @@ class  Format {
 
 	AVFrame* get_frames()
 	{
-		if (rchd_end)
-			return NULL;
 		AVFrame *frame=alloc_frame ();
 		AVFrame *fframe=alloc_frame ();
 		ret=avcodec_receive_frame (ctx.dec_ctx, frame);
 		if (ret<0)
 		{
-			rchd_end=1;
 			av_frame_free (&frame);
 			av_frame_free (&fframe);
-			return NULL;
+			throw ret;
 		}
 		fframe->sample_rate=enc->sample_rate;
 		fframe->channel_layout=enc->channel_layout;
@@ -567,9 +564,17 @@ namespace filter {
 
 namespace f
 {
+	enum stage_t {
+		STAGE_G_IN=0,
+		STAGE_G_OUT,
+		STAGE_G_FLUSH,
+		STAGE_G_END
+	};
+
 	struct fobject {
 		PyObject_HEAD
 		Format* fmtctx;
+		stage_t stage;
 	};
 
 	using T=PyObject*;
@@ -586,6 +591,7 @@ namespace f
 			return 1;
 		try{
 			fb->fmtctx=new Format(path);
+			fb->stage=STAGE_G_IN;
 			PyObject_SetAttrString(t,
 				"_duration",
 				PyLong_FromLong (0));
@@ -613,13 +619,9 @@ namespace f
 			fobject* f=(fobject*) s;
 			AVPacket*& pkt=f->fmtctx->get_packet ();
 
-			/*
-			PyObject_SetAttrString(s, "_duration",
-					PyObject_CallMethod(PyObject_GetAttrString(s, "_duration"),
-					"__radd__", "(O)", PyLong_FromLongLong (pkt->duration)));
-					*/
-					PyObject_CallMethod(s,
-					"duration_cb", "(O)", PyLong_FromLongLong (pkt->duration));
+			PyObject_CallMethod(s,
+			"duration_cb", "(O)",
+			PyLong_FromLongLong (pkt->duration));
 
 			AVPacket* res=av_packet_clone(pkt);
 			return PyCapsule_New(res, "_packet",
@@ -711,8 +713,8 @@ namespace f
 	static PyMethodDef methods[]={
 		{"get_packet", get_packet, METH_VARARGS,
 			"Get a packet"},
-		{"send_frame",get_frames, METH_VARARGS,
-			"Get_frame"},
+		/*{"send_frame",get_frames, METH_VARARGS,
+			"Get_frame"},*/
 		{"seek_duration",
 			seek_duration, METH_VARARGS,
 			"Seek AVFORMATCONTEXT"},
@@ -735,6 +737,69 @@ namespace f
 				"_frame");
 		Py_RETURN_NONE;
 	}
+	T format_iter (T s)
+	{
+		Py_XINCREF (s);
+		return s;
+	}
+	T format_next (T s)
+	{
+		fobject* fb=(fobject*)s;
+		switch(fb->stage)
+		{
+			case STAGE_G_IN:
+			try{
+				AVPacket* pkt=fb->fmtctx->get_packet ();
+				if (pkt)
+				PyObject_CallMethod(s,
+				"duration_cb", "(O)",
+				PyLong_FromLongLong (pkt->duration));
+
+				fb->fmtctx->set_frame (pkt);
+				fb->stage=STAGE_G_OUT;
+			}catch(int& r)
+			{
+				fb->stage=STAGE_G_FLUSH;
+			}
+			break;
+			case STAGE_G_FLUSH:
+			try{
+				fb->fmtctx->set_frame (NULL);
+				fb->stage=STAGE_G_OUT;
+			}catch(int& r)
+			{
+				fb->stage=STAGE_G_END;
+			}
+			break;
+			case STAGE_G_OUT:
+			try{
+				AVFrame* frame=fb->fmtctx->get_frames ();
+				if (!frame)
+					throw 0x0;
+				fb->stage=STAGE_G_OUT;
+				return PyCapsule_New(frame, "_frame",
+						+[](T obj)
+				{
+					AVFrame* p=
+					(AVFrame*)
+					PyCapsule_GetPointer (obj, "_frame");
+					av_frame_free(&p);
+				});
+			}catch(int& r)
+			{
+				fb->stage=STAGE_G_IN;
+			}
+			break;
+			case STAGE_G_END:
+			default:
+			Py_XDECREF (PyExc_StopIteration);
+			PyErr_Format (PyExc_StopIteration,
+				"Failed to allocate.");
+			return NULL;
+			break;
+		}
+		Py_RETURN_NONE;
+	}
 	static PyTypeObject fobject_type ={
 		PyVarObject_HEAD_INIT (NULL, 0)
 		.tp_name="AVFormatContext",
@@ -743,6 +808,8 @@ namespace f
 		.tp_new=fobject_new,
 		.tp_methods=methods,
 		.tp_basicsize=sizeof(fobject),
+		.tp_iter=format_iter,
+		.tp_iternext=format_next,
 		.tp_flags=Py_TPFLAGS_DEFAULT|Py_TPFLAGS_BASETYPE
 	};
 
