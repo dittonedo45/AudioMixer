@@ -227,6 +227,7 @@ class  Format {
 	Codec ctx;
 	SwrContext* swr{NULL};
 	AVPacket* pkt{av_packet_alloc()};
+	AVFrame *frame{alloc_frame ()};
 	AVCodecContext* enc;
 
 	operator int()
@@ -399,12 +400,10 @@ class  Format {
 
 	AVFrame* get_frames()
 	{
-		AVFrame *frame=alloc_frame ();
 		AVFrame *fframe=alloc_frame ();
 		ret=avcodec_receive_frame (ctx.dec_ctx, frame);
 		if (ret<0)
 		{
-			av_frame_free (&frame);
 			av_frame_free (&fframe);
 			throw ret;
 		}
@@ -415,12 +414,12 @@ class  Format {
 		av_frame_get_buffer (fframe, 0);
 
 		swr_convert_frame (swr, fframe, frame);
-		av_frame_free (&frame);
 		return fframe;
 	}
 
 	~Format ()
 	{
+		av_frame_free (&frame);
 		avcodec_free_context (&enc);
 		avformat_close_input (&fmtctx);
 		avformat_free_context(fmtctx);
@@ -478,6 +477,7 @@ namespace filter {
 
 		if (!PyArg_ParseTuple (a, "i|O", &index, &arg))
 			return NULL;
+		Py_XINCREF (arg);
 		if (f->stage!=EF_GET_END)
 		{
 			Py_RETURN_FALSE;
@@ -495,8 +495,10 @@ namespace filter {
 				 NULL);
 
 		}
+		if (r<0)
+			Py_RETURN_FALSE;
 		f->stage=EF_GET_OUT;
-		return PyLong_FromLong (r);
+		Py_RETURN_TRUE;
 	}
 	
 	T filter_iter (T s)
@@ -531,10 +533,7 @@ namespace filter {
 			break;
 			case EF_SEND_ENCODER:
 			try{
-				fprintf(stderr, "ENTERING EF_SEND_ENCODER\n");
 				r=avcodec_send_frame (s->fg->enc, s->received_frame);
-				av_frame_free (&s->received_frame);
-				fprintf(stderr, "Leaving\n");
 				if (r<0)
 					throw r;
 				s->stage=EF_GET_RECEIVE;
@@ -547,25 +546,27 @@ namespace filter {
 			{
 				AVPacket* pkt=av_packet_alloc ();
 				try{
-				fprintf(stderr, "ENTERING EF_GET_RECEIVE\n");
 					r=avcodec_receive_packet (s->fg->enc, pkt);
-				fprintf(stderr, "Leaving EF_GET_RECEIVE\n");
 					if (r<0)
 					{
 						av_packet_free (&pkt);
 						throw r;
 					}
 					s->stage=EF_GET_RECEIVE;
+					T res=PyBytes_FromStringAndSize((const char*)pkt->data,
+							pkt->size);
+					av_packet_free (&pkt);
+					return res;
 				}catch(int& err)
 				{
 					s->stage=EF_GET_END;
-					s->stage=EF_GET_RECEIVE;
+					if (r==AVERROR(EAGAIN))
+						s->stage=EF_GET_OUT;
 				}
 			}
 			break;
 			case EF_GET_END:
 			default:
-			Py_XDECREF (PyExc_StopIteration);
 			PyErr_Format (PyExc_StopIteration,
 				"Stop Iterating The Thing.");
 			return NULL;
@@ -718,7 +719,6 @@ namespace f
 			break;
 			case STAGE_G_END:
 			default:
-			Py_XDECREF (PyExc_StopIteration);
 			PyErr_Format (PyExc_StopIteration,
 				"Failed to allocate.");
 			return NULL;
@@ -784,7 +784,7 @@ namespace f
 auto main(int argsc, char **args) -> int
 {
 	using namespace std;
-	//av_log_set_callback (0x0);
+	av_log_set_callback (0x0);
 	PyImport_AppendInittab ("fobject", &f::PyInit_av);
 	Py_InitializeEx (0);
 	Py_BytesMain (argsc, args);

@@ -72,22 +72,20 @@ class Deck(object):
 class Filter(fobject.Filter):
     def __init__(self, arg):
         fobject.Filter.__init__ (self, arg)
+        self.ass=asyncio.Semaphore (1)
+        self.cnt=[0,0]
     def send(self, frame, index):
-        print(self.send_frame_to_src(index, frame),
-                file=sys.stderr)
+        return self.send_frame_to_src(index, frame)
     def flush(self, index):
         self.send_frame_to_src(index)
     async def write (self, file):
         for pkt in self:
-            print(pkt, file=sys.stderr)
-            if pkt==False:
+            if not pkt:
                 continue
+            file.write(pkt)
     async def ping_pong (main_filter, i, index, file):
-        while True:
-            res=main_filter.send(i, index)
-            if res==False:
-                await asyncio.sleep(0)
-                continue
+        async with main_filter.ass:
+            main_filter.send(i, index)
             await main_filter.write (file)
 
 class effects(object):
