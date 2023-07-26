@@ -22,14 +22,6 @@ class Format(fobject.Format):
     def len(s):
         return s.max_duration()
 
-    async def _get_packet(s):
-        async def get_packet():
-            return await run(s.get_packet)
-        while True:
-            try:
-                yield await get_packet ()
-            except fobject.EOF:
-                return
     def stop(s, arg=False):
         s._stop=arg
     def calculate(self):
@@ -41,33 +33,14 @@ class Format(fobject.Format):
             self.percentage=(d/m)*100
         else:
             self.percentage=100
-            print(d, m, file=sys.stderr)
         return self.percentage
 
     async def __aiter__(s):
-        try:
-            async for i in s._get_packet ():
-                pkt=s.send_frame(i)
-                if not pkt:
-                    continue
-                yield s, pkt
-                try:
-                    while True:
-                        yield s, s.send_frame(None)
-                except EOFError:
-                    pass
-            try:
-                for i in s.get_packet (False):
-                    pkt=s.send_frame(i)
-                    if not pkt:
-                        continue
-                    yield s, pkt
-                    while True:
-                        yield s, s.send_frame(None)
-            except fobject.EOF:
-                pass
-        except EOFError:
-            pass
+        for i in s:
+            if i==None:
+                continue
+            yield s, i
+            await asyncio.sleep (0)
     def __repr__(s):
         return "AVFormat({0!r})".format(s.args[0])
     pass
@@ -89,24 +62,23 @@ class Deck(object):
         s._stop=arg
     async def __aiter__(s):
         while True:
-            async def Format_(*x):
-                return await run(Format, *x)
             try:
-                x=await Format_(rand(s.tracks))
+                x=Format(rand(s.tracks))
                 s.cur_track(x, s.index)
             except SystemError as e:
                     continue
             else:
                 lis=[*map(lambda x: os.path.join("effects", x),
                     os.listdir("effects"))]
-                y=await Format_ (ef:=erand(lis))
-                print(ef, file=sys.stderr)
+                y=Format (ef:=erand(lis))
                 async def tg(*s):
                     for i in s:
                         async for j in i:
                             yield j
-                async for i in tg(y,*[await Format_(erand(lis))
+                async for i in tg(y,*[Format(erand(lis))
                     for _ in range(erand([*range(1, 3)]))],x):
+                    print(i, file=sys.stderr)
+                    continue
                     yield x, i
 
 class Filter(fobject.Filter):
@@ -176,13 +148,7 @@ async def deck1(x, main_filter, index, file):
     lreserve=[]
     async for x,i in Deck(x, main_filter.add, index):
         i=i[-1]
-        lreserve.append(i)
-        if len(lreserve)<90:
-            continue
-        await main_filter.ping_pong (lreserve.pop (), index, file)
-    for _ in iter(lambda: len(lreserve), 0):
-        await main_filter.ping_pong (lreserve.pop (), index, file)
-        await asyncio.sleep(0)
+        await main_filter.ping_pong (i, index, file)
 
 async def filter_switch(main_filter):
     i=0

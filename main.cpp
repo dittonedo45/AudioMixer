@@ -612,93 +612,6 @@ namespace f
 		fobject* f=(fobject*) o;
 		delete f->fmtctx;
 	}
-	T get_packet (T s, T a)
-	{
-		AVPacket *pkt(av_packet_alloc ());
-		try {
-			fobject* f=(fobject*) s;
-			AVPacket*& pkt=f->fmtctx->get_packet ();
-
-			PyObject_CallMethod(s,
-			"duration_cb", "(O)",
-			PyLong_FromLongLong (pkt->duration));
-
-			AVPacket* res=av_packet_clone(pkt);
-			return PyCapsule_New(res, "_packet",
-					+[](T obj)
-					{
-					Py_XINCREF (obj);
-					AVPacket* p=
-					(AVPacket*)
-					PyCapsule_GetPointer (obj, "_packet");
-					av_packet_free(&p);
-					});
-		}catch(...)
-		{
-			PyErr_Format (Format_EOF,
-					"reached end of file");
-			return NULL;
-		}
-	}
-	T get_frames (T s, T a)
-	{
-		T arg;
-		if (!PyArg_ParseTuple (a, "O", &arg))
-			return NULL;
-		try {
-			fobject* f=(fobject*) s;
-
-			if (arg!=Py_None)
-			{
-				if (arg==Py_False)
-				{
-					f->fmtctx->set_frame (NULL);
-				}else
-				try{
-					Py_XINCREF (arg);
-					AVPacket* pkt=(AVPacket*)
-					PyCapsule_GetPointer(arg, "_packet");
-
-					f->fmtctx->set_frame (pkt);
-				} catch (int& ret)
-				{
-					Py_RETURN_NONE;
-				}
-			}
-			AVFrame* frame=f->fmtctx->get_frames ();
-			if (!frame)
-				throw 0x0;
-			return PyCapsule_New(frame, "_frame",
-					+[](T obj)
-				{
-					AVFrame* p=
-					(AVFrame*)
-					PyCapsule_GetPointer (obj, "_frame");
-					av_frame_free(&p);
-				});
-		}catch(...)
-		{
-			PyErr_Format (PyExc_EOFError,
-					"reached end of file");
-			return NULL;
-		}
-	}
-	T seek_duration (T s, T a)
-	{
-		int arg{0};
-		if (!PyArg_ParseTuple (a, "|d", &arg))
-			return NULL;
-		try {
-			fobject* f=(fobject*) s;
-			f->fmtctx->seek (arg);
-		}catch(...)
-		{
-			PyErr_Format (PyExc_Exception,
-					"Can not seek any file so easily.");
-			return NULL;
-		}
-		Py_RETURN_NONE;
-	}
 	T get_duration (T s, T a)
 	{
 		fobject* f=(fobject*) s;
@@ -711,13 +624,6 @@ namespace f
 		return PyLong_FromLongLong (f->fmtctx->duration());
 	}
 	static PyMethodDef methods[]={
-		{"get_packet", get_packet, METH_VARARGS,
-			"Get a packet"},
-		/*{"send_frame",get_frames, METH_VARARGS,
-			"Get_frame"},*/
-		{"seek_duration",
-			seek_duration, METH_VARARGS,
-			"Seek AVFORMATCONTEXT"},
 		{"duration",
 			get_duration, METH_VARARGS,
 			"get_duration AVFORMATCONTEXT"},
