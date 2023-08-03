@@ -113,8 +113,8 @@ async def filter_switch(main_filter):
         s="in2" if (i%2)==0 else "in1"
         i=i+1
         for j in range(100,300, 50):
-            await main_filter.parse_and_config(f"""[{f}] lowpass,
-                    [{s}]amerge, asetrate=44100*1.{j}[out]""")
+            await main_filter.parse_and_config(f"""[{f}]  anullsink;
+                    [{s}] asetrate=44100*1.{j}[out]""")
             await asyncio.sleep(3.1)
         await asyncio.sleep(19)
 
@@ -125,8 +125,8 @@ async def go_do_something():
         await asyncio.sleep (0.01)
 
 async def main (*args):
-    main_filter=Filter("[in1] lowpass, [in2]amerge, asetrate=44100*1.2[out]")
-    await main_filter.parse_and_config ("[in1] lowpass, [in2]amerge, asetrate=44100*1.2[out]")
+    main_filter=Filter("[in1] anullsink; [in2] asetrate=44100*1.2[out]")
+    await main_filter.parse_and_config ("[in1] anullsink; [in2] asetrate=44100*1.2[out]")
     await asyncio.gather(
         *map(lambda x: deck1(main_filter, list(args), x), range(2)),
         go_do_something(),
