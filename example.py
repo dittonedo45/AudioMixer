@@ -32,7 +32,6 @@ class Format(fobject.Format):
                 return
     async def __aiter__(s):
         async for i in s._get_packet ():
-            await asyncio.sleep(0)
             pkt=s.send_frame(i)
             if not pkt:
                 continue
@@ -92,6 +91,19 @@ def just(i, x):
     while (x:=x-1)>=0:
         yield next(y)
 
+def _get_str_filter (j):
+    st=1
+    def _swing(o):
+        nonlocal st, j
+        st=1 if st==2 else 2
+        arg1=st
+        arg2=1 if arg1==2 else 2
+
+        return f"""[in{arg1}] lowpass, [in{arg2}]amerge,
+    asetrate=44100*1.{j}, silenceremove=stop_periods=-1:stop_duration=1:stop_threshold=-90dB[out]"""
+    return _swing
+get_str_filter=_get_str_filter (1)
+
 async def filter_switch():
     global main_filter
     global do_not_just_change
@@ -101,35 +113,27 @@ async def filter_switch():
         if (i%2)==0:
             for j in range(100,300, 100):
                 async with do_not_just_change:
-                    main_filter=fobject.Filter(f"""[in1] lowpass,
-                        [in2]amerge, asetrate=44100*1.{j}[out]""")
+                    main_filter=fobject.Filter (get_str_filter (j))
                 await asyncio.sleep(0.8)
-            main_filter=fobject.Filter(f"""[in2] anullsink;
-                [in1]asetrate=44100*1.{j}[out]""")
+            main_filter=fobject.Filter(get_str_filter (j))
             await asyncio.sleep(80)
             for j in range(100,300, -100):
                 async with do_not_just_change:
-                    main_filter=fobject.Filter(f"""[in1] lowpass,
-                        [in2]amerge, asetrate=44100*1.{j}[out]""")
+                    main_filter=fobject.Filter(get_str_filter (j))
                 await asyncio.sleep(0.8)
-            main_filter=fobject.Filter(f"""[in2] anullsink;
-                [in1]asetrate=44100*1.{j}[out]""")
+            main_filter=fobject.Filter(get_str_filter (j))
         else:
             for j in range(100,300, 100):
                 async with do_not_just_change:
-                    main_filter=fobject.Filter(f"""[in2] lowpass,
-                        [in1]amerge, asetrate=44100*1.{j}[out]""")
+                    main_filter=fobject.Filter(get_str_filter (j))
                 await asyncio.sleep(0.8)
-            main_filter=fobject.Filter(f"""[in1] anullsink;
-                [in2]asetrate=44100*1.{j}[out]""")
+            main_filter=fobject.Filter(get_str_filter (j))
             await asyncio.sleep(80)
             for j in range(100,300, -100):
                 async with do_not_just_change:
-                    main_filter=fobject.Filter(f"""[in2] lowpass,
-                        [in1]amerge, asetrate=44100*1.{j}[out]""")
+                    main_filter=fobject.Filter(get_str_filter (j))
                 await asyncio.sleep(0.8)
-            main_filter=fobject.Filter(f"""[in1] anullsink;
-                [in2]asetrate=44100*1.{j}[out]""")
+            main_filter=fobject.Filter (get_str_filter (j))
         i=i+1
 
 async def main (cb, *args):
