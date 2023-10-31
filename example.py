@@ -19,10 +19,9 @@ async def run(*args):
         return await loop.run_in_executor(None, *args)
 
 class Format(fobject.Format):
-    def __init__(s, *a, **kw):
-        s.args=a
-        (fobject.Format).__init__(s, *a, *kw)
-        pass
+    def __init__(self, *a, **kw):
+        self.args = a
+        (fobject.Format).__init__(self, *a, *kw)
     async def _get_packet(s):
         async def get_packet():
             return await run(s.get_packet)
@@ -31,22 +30,21 @@ class Format(fobject.Format):
                 yield await get_packet ()
             except fobject.EOF:
                 return
-    async def __aiter__(s):
-        async for i in s._get_packet ():
+    async def __aiter__(self):
+        async for i in self._get_packet():
             await asyncio.sleep(0)
-            yield  s, s.send_frame(i)
+            yield (self, self.send_frame(i))
             try:
                 while True:
-                    yield s, s.send_frame(None)
+                    yield (self, self.send_frame(None))
             except EOFError:
                 pass
-    def __repr__(s):
-        return "AVFormat({0!r})".format(s.args[0])
+    def __repr__(self):
+        return "AVFormat({0!r})".format(self.args[0])
     pass
 
 def args():
     yield from iter(sys.argv[1:])
-    pass
 
 async def rand(l):
     loop=asyncio.get_running_loop()
